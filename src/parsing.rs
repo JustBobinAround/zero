@@ -84,7 +84,7 @@ impl<R: Read + Seek> Parser<R> {
     /// This method is useful if you need to start parsing something but aren't fully sure
     /// what you are parsing is the correct structure. A good example is parsing an email:
     ///
-    /// ```
+    /// ```text
     /// someuser@someemail.com
     /// ```
     ///

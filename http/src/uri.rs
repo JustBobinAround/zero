@@ -4,7 +4,7 @@ use zero::parsing::{Parsable, ParseErr, ParseResult, Parser};
 /// Based on rfc3986 Section 3.1
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// scheme      = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -37,7 +37,7 @@ impl<R: Read + Seek> Parsable<R> for Scheme {
 /// Based on rfc3986 Section 2.1
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// pct-encoded = "%" HEXDIG HEXDIG
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -68,7 +68,7 @@ impl<R: Read + Seek> Parsable<R> for PctEncoding {
 /// Based on rfc3986 Section 3.2.1
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// userinfo    = *( unreserved / pct-encoded / sub-delims / ":" )
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,7 +132,7 @@ impl<R: Read + Seek> Parsable<R> for UserInfo {
 /// Based on rfc3986 Section 3.2.2
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// userinfo    = *( unreserved / pct-encoded / sub-delims / ":" )
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -226,7 +226,7 @@ impl<R: Read + Seek> Parsable<R> for Host {
 /// Based on rfc3986 Section 3.2.3
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// port        = *DIGIT
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -250,7 +250,7 @@ impl<R: Read + Seek> Parsable<R> for Port {
 /// Based on rfc3986 Section 3.2
 ///
 /// # Augmented Backus-Naur Form
-/// ```
+/// ```text
 /// authority   = [ userinfo "@" ] host [ ":" port ]
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
