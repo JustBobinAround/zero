@@ -27,15 +27,43 @@ where
 /// Should only be used with ParseResult Type.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParseErr {
-    InvalidRequestOption,
+    InvalidRequestOption {
+        found: String,
+    },
     InvalidScheme,
-    InvalidPctEncoding { found: String },
-    InvalidIPv4Num { found: String },
-    InvalidIPv4Char { found: char },
-    InvalidIPv4Len { found: usize },
-    FailedToConsume { found: Option<u8> },
-    FailedToParseNum { found: String, radix: u32 },
-    FailedToSeekDuringPop { tried_seeking_to: usize },
+    InvalidPctEncoding {
+        found: String,
+    },
+    InvalidIPv4Num {
+        found: String,
+    },
+    InvalidIPv4Char {
+        found: char,
+    },
+    InvalidIPv4Len {
+        found: usize,
+    },
+    InvalidPath,
+    InvalidUserInfo,
+    NotUserInfo {
+        presumed_host: String,
+    }, // not really an err, just needs a breakout for an edgecase
+    EmptyStack,
+    ExpectedStr {
+        expected: String,
+        found_char: char,
+        at: usize,
+    },
+    FailedToConsume {
+        found: Option<u8>,
+    },
+    FailedToParseNum {
+        found: String,
+        radix: u32,
+    },
+    FailedToSeekDuringPop {
+        tried_seeking_to: usize,
+    },
 }
 
 /// Result type for Parsable trait
@@ -55,7 +83,6 @@ pub type StrParser<'a> = Parser<Cursor<&'a str>>;
 pub struct Parser<R: Read + Seek> {
     reader: BufReader<R>,
     idx: usize,
-    idx_stack: Vec<usize>,
     peek: Option<u8>,
 }
 
@@ -65,7 +92,6 @@ impl<R: Read + Seek> Parser<R> {
         Parser {
             reader: BufReader::new(stream),
             idx: 0,
-            idx_stack: Vec::new(),
             peek: None,
         }
     }
@@ -74,50 +100,8 @@ impl<R: Read + Seek> Parser<R> {
         Parser {
             reader: BufReader::new(stream),
             idx: 0,
-            idx_stack: Vec::new(),
             peek: None,
         }
-    }
-
-    /// Pushes the current buffer index to a stack which can be "seeked" back to at a later point.
-    ///
-    /// This method is useful if you need to start parsing something but aren't fully sure
-    /// what you are parsing is the correct structure. A good example is parsing an email:
-    ///
-    /// ```text
-    /// someuser@someemail.com
-    /// ```
-    ///
-    /// One can not know if `someuser` is a domain or user info until the `@` symbol is found. If it is not
-    /// found, we may need to jump back and run an additional check that is different for a domain. Hence,
-    /// we can "push" at the start and if `@` is not found, then we can "pop" and jump back to the start.
-    ///
-    /// Try and avoid over use of this as you maybe reparsing the same information. Furthermore,
-    /// when the stack is "popped", we have to run a seek operation on the stream which can be expensive
-    /// especially if the jump is outside the current buffer.
-    ///
-    /// If you end up not needing the pushed value, but want to remove from the stack without a jump/seek,
-    /// call `pop_no_seek` instead.
-    pub fn push(&mut self) {
-        self.idx_stack.push(self.idx);
-    }
-
-    /// Pops the latest stored idx on the parsers stack and then makes the parser jump to the index.
-    pub fn pop(&mut self) -> ParseResult<()> {
-        if let Some(new_idx) = self.idx_stack.pop() {
-            self.reader
-                .seek(SeekFrom::Start(new_idx as u64))
-                .map_err(|_| ParseErr::FailedToSeekDuringPop {
-                    tried_seeking_to: new_idx,
-                })?;
-        }
-
-        Ok(())
-    }
-
-    /// Pops the latest stored idx on the parsers stack but does not jump to the index.
-    pub fn pop_no_seek(&mut self) {
-        self.idx_stack.pop();
     }
 
     /// Gives access to the current value under the buffers seeking head. This is usually
@@ -161,6 +145,20 @@ impl<R: Read + Seek> Parser<R> {
         while f(self) {
             if let Some(c) = self.consume() {
                 s.push(c as char);
+            } else {
+                break;
+            }
+        }
+
+        s
+    }
+
+    pub fn consume_while_lower<F: Fn(&mut Self) -> bool>(&mut self, f: F) -> String {
+        let mut s = String::new();
+
+        while f(self) {
+            if let Some(c) = self.consume() {
+                s.push((c as char).to_ascii_lowercase());
             } else {
                 break;
             }
@@ -321,5 +319,23 @@ impl<R: Read + Seek> Parser<R> {
         } else {
             Err(ParseErr::FailedToConsume { found: peek })
         }
+    }
+
+    pub fn expect_str(&mut self, s: &str) -> ParseResult<()> {
+        for c in s.bytes() {
+            if !self.consume().is_some_and(|found| c == found) {
+                return Err(ParseErr::ExpectedStr {
+                    expected: s.to_string(),
+                    found_char: c as char,
+                    at: self.idx,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn expect_crlf(&mut self) -> ParseResult<()> {
+        self.expect_str("\n")
     }
 }

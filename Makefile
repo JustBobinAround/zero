@@ -1,5 +1,5 @@
 test:
-	cargo test
+	cargo test --workspace
 
 docs:
 	cargo doc --workspace

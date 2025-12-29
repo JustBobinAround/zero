@@ -1,5 +1,9 @@
-use std::io::{Read, Seek};
-use zero::parsing::{Parsable, ParseErr, ParseResult, Parser};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    io::{Read, Seek},
+};
+use zero::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
 
 /// Based on rfc3986 Section 3.1
 ///
@@ -26,7 +30,7 @@ impl<R: Read + Seek> Parsable<R> for Scheme {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         if parser.matches(|c| c.is_ascii_alphabetic()) {
             Ok(Scheme(
-                parser.consume_while(|p| p.matches(Self::is_valid_char)),
+                parser.consume_while_lower(|p| p.matches(Self::is_valid_char)),
             ))
         } else {
             Err(ParseErr::InvalidScheme)
@@ -78,25 +82,12 @@ impl UserInfo {
     pub fn from(s: &str) -> Self {
         Self(String::from(s))
     }
-    fn maybe_parse<R: Read + Seek>(parser: &mut Parser<R>) -> ParseResult<Option<Self>> {
-        let user_info = Self::parse(parser)?;
-        let info = if user_info.0.len() > 0 {
-            Some(user_info)
-        } else {
-            None
-        };
-
-        Ok(info)
-    }
 }
 
 impl<R: Read + Seek> Parsable<R> for UserInfo {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let mut s = String::new();
-        parser.push();
-
-        let mut found_at = false;
-
+        let mut valid = false;
         while let Some(c) = parser.peek() {
             if URI::is_unreserved(c) {
                 s.push(c as char);
@@ -111,20 +102,17 @@ impl<R: Read + Seek> Parsable<R> for UserInfo {
                 let pct_encoding = PctEncoding::parse(parser)?;
                 s.push(pct_encoding.0);
             } else if c == b'@' {
-                found_at = true;
                 parser.consume();
-                parser.pop_no_seek();
+                valid = true;
                 break;
             } else {
-                parser.pop()?;
-                break;
+                return Err(ParseErr::NotUserInfo { presumed_host: s });
             }
         }
-
-        if found_at {
+        if valid {
             Ok(UserInfo(s))
         } else {
-            Ok(UserInfo(String::new()))
+            Err(ParseErr::InvalidUserInfo)
         }
     }
 }
@@ -190,7 +178,7 @@ impl Host {
                 if !c.is_ascii_digit() && c != b'.' {
                     is_ipv4 = false;
                 }
-                s.push(c as char);
+                s.push((c as char).to_ascii_lowercase());
                 parser.consume();
             } else if URI::is_sub_delim(c) {
                 is_ipv4 = false;
@@ -199,7 +187,7 @@ impl Host {
             } else if c == b'%' {
                 is_ipv4 = false;
                 let pct_encoding = PctEncoding::parse(parser)?;
-                s.push(pct_encoding.0);
+                s.push(pct_encoding.0.to_ascii_lowercase());
             } else {
                 break;
             }
@@ -262,9 +250,20 @@ pub struct Authority {
 
 impl<R: Read + Seek> Parsable<R> for Authority {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        parser.skip_whitespace();
-        let user_info = UserInfo::maybe_parse(parser)?;
-        let host = Host::parse(parser)?;
+        let (user_info, host) = match UserInfo::parse(parser) {
+            Ok(user_info) => {
+                let host = Host::parse(parser)?;
+                (Some(user_info), host)
+            }
+            Err(ParseErr::NotUserInfo {
+                presumed_host: host_str,
+            }) => {
+                let mut str_parser = StrParser::from_str(host_str.as_str());
+                let host = Host::parse(&mut str_parser)?;
+                (None, host)
+            }
+            Err(e) => return Err(e),
+        };
         let port = if parser.matches(|c| c == b':') {
             let port = Port::parse(parser)?;
             Some(port)
@@ -277,6 +276,198 @@ impl<R: Read + Seek> Parsable<R> for Authority {
             host,
             port,
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PathType {
+    Relative,
+    Absolute,
+}
+
+/// Based on rfc3986 Section 3.2
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+/// path          = path-abempty    ; begins with "/" or is empty
+///   / path-absolute   ; begins with "/" but not "//"
+///   / path-noscheme   ; begins with a non-colon segment
+///   / path-rootless   ; begins with a segment
+///   / path-empty      ; zero characters
+///
+/// path-abempty  = *( "/" segment )
+/// path-absolute = "/" [ segment-nz *( "/" segment ) ]
+/// path-noscheme = segment-nz-nc *( "/" segment )
+/// path-rootless = segment-nz *( "/" segment )
+/// path-empty    = 0<pchar>
+///
+/// segment       = *pchar
+/// segment-nz    = 1*pchar
+/// segment-nz-nc = 1*( unreserved / pct-encoded / sub-delims / "@" )
+/// ; non-zero-length segment without any colon ":"
+///
+/// pchar         = unreserved / pct-encoded / sub-delims / ":" / "@"
+/// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Path {
+    ty: PathType,
+    segments: Vec<String>,
+}
+
+impl Path {
+    /// See Path Augmented Backus-Naur Form for justification
+    fn is_valid_segment(c: u8) -> bool {
+        URI::is_unreserved(c) || URI::is_sub_delim(c) || c == b':' || c == b'@'
+    }
+}
+
+impl<R: Read + Seek> Parsable<R> for Path {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let mut segments = Vec::new();
+        let ty = if parser.matches(|c| c == b'/') {
+            parser.consume();
+            PathType::Absolute
+        } else {
+            PathType::Relative
+        };
+
+        let mut s = String::new();
+        while let Some(c) = parser.peek() {
+            if Path::is_valid_segment(c) {
+                s.push(c as char);
+                parser.consume();
+            } else if c == b'%' {
+                let pct = PctEncoding::parse(parser)?;
+                s.push(pct.0);
+            } else if c == b'/' {
+                segments.push(s);
+                s = String::new();
+                parser.consume();
+            } else {
+                break;
+            }
+        }
+
+        if s.len() > 0 {
+            segments.push(s);
+        }
+
+        Ok(Path { ty, segments })
+    }
+}
+
+/// Based on rfc3986 section 3.4
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+/// query       = *( pchar / "/" / "?" )
+/// ```
+///
+/// This struct assumes standardization of query parameters which is technically not true.
+///
+/// For defensive reasons, this will error if parameter is invalid, even if RFC says otherwise when accounting for more "raw" querries.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Query {
+    parameters: HashMap<String, String>,
+}
+
+impl Query {
+    fn sorted_keys(&self) -> Vec<&String> {
+        let mut keys: Vec<&String> = self.parameters.keys().collect();
+        keys.sort();
+        keys
+    }
+}
+
+impl<R: Read + Seek> Parsable<R> for Query {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        parser.consume_or_err(|c| c == b'?')?;
+        let mut parameters = HashMap::new();
+
+        while let Some(c) = parser.peek()
+            && c != b'#'
+        {
+            let mut key = String::new();
+            while let Some(c) = parser.peek()
+                && c != b'='
+            {
+                if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+                    key.push(c as char);
+                    parser.consume();
+                } else if c == b'%' {
+                    let pct = PctEncoding::parse(parser)?;
+                    key.push(pct.0);
+                } else {
+                    break;
+                }
+            }
+
+            parser.consume_or_err(|c| c == b'=')?;
+            let mut val = String::new();
+
+            while let Some(c) = parser.peek()
+                && !URI::is_sub_delim(c)
+            {
+                if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+                    val.push(c as char);
+                    parser.consume();
+                } else if c == b'%' {
+                    let pct = PctEncoding::parse(parser)?;
+                    val.push(pct.0);
+                } else {
+                    break;
+                }
+            }
+
+            if parser.matches(|c| c != b'#') {
+                parser.consume();
+            }
+
+            parameters.insert(key, val);
+        }
+
+        Ok(Query { parameters })
+    }
+}
+
+impl PartialOrd for Query {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Query {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.sorted_keys().cmp(&other.sorted_keys())
+    }
+}
+
+/// Based on rfc3986 section 3.5
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+/// fragment    = *( pchar / "/" / "?" )
+/// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Fragment(String);
+
+impl<R: Read + Seek> Parsable<R> for Fragment {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        parser.consume_or_err(|c| c == b'#')?;
+        let mut fragment = String::new();
+        while let Some(c) = parser.peek() {
+            if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+                fragment.push(c as char);
+                parser.consume();
+            } else if c == b'%' {
+                let pct = PctEncoding::parse(parser)?;
+                fragment.push(pct.0);
+            } else {
+                break;
+            }
+        }
+
+        Ok(Fragment(fragment))
     }
 }
 
@@ -297,20 +488,21 @@ impl<R: Read + Seek> Parsable<R> for Authority {
 /// foo://example.com:8042/over/there?name=ferret#nose
 /// \_/   \______________/\_________/ \_________/ \__/
 ///  |           |            |            |        |
-/// scheme     authority       path        query   fragment
+/// scheme   authority       path        query   fragment
 /// ```
+///
+/// For now, this is only supporting authority format
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct URI {
     scheme: Scheme,
     authority: Authority,
+    path: Path,
+    query: Option<Query>,
+    fragment: Option<Fragment>,
 }
 
 impl URI {
-    // pub fn pct_decode() -> u8 {
-    //     let mut
-    //     u8::from_str_radix("A", 16)
-    // }
-
+    /// Based on See rfc3986 section 3.3
     pub fn is_unreserved(c: u8) -> bool {
         c.is_ascii_alphanumeric() || c == b'-' || c == b'.' || c == b'_' || c == b'~'
     }
@@ -339,7 +531,30 @@ impl URI {
 
 impl<R: Read + Seek> Parsable<R> for URI {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        unimplemented!()
+        let scheme = Scheme::parse(parser)?;
+        parser.expect_str("://")?;
+        let authority = Authority::parse(parser)?;
+        let path = Path::parse(parser)?;
+
+        let query = if parser.matches(|c| c == b'?') {
+            Some(Query::parse(parser)?)
+        } else {
+            None
+        };
+
+        let fragment = if parser.matches(|c| c == b'#') {
+            Some(Fragment::parse(parser)?)
+        } else {
+            None
+        };
+
+        Ok(URI {
+            scheme,
+            authority,
+            path,
+            query,
+            fragment,
+        })
     }
 }
 
@@ -379,12 +594,16 @@ mod tests {
     #[test]
     fn test_user_info() {
         let mut parser = StrParser::from_str("someuser@some_domain.com");
+        assert_eq!(UserInfo::parse(&mut parser), Ok(UserInfo::from("someuser")));
+        let mut parser = StrParser::from_str("someusersome_domain.com/apath");
         assert_eq!(
-            UserInfo::maybe_parse(&mut parser),
-            Ok(Some(UserInfo::from("someuser")))
+            UserInfo::parse(&mut parser),
+            Err(ParseErr::NotUserInfo {
+                presumed_host: String::from("someusersome_domain.com")
+            })
         );
         let mut parser = StrParser::from_str("someusersome_domain.com");
-        assert_eq!(UserInfo::maybe_parse(&mut parser), Ok(None));
+        assert_eq!(UserInfo::parse(&mut parser), Err(ParseErr::InvalidUserInfo));
     }
 
     #[test]
@@ -435,6 +654,79 @@ mod tests {
                 user_info: Some(UserInfo::from("some=user")),
                 host: Host::Domain(String::from("some=emaildomain.com")),
                 port: Some(Port(8000)),
+            })
+        );
+    }
+
+    #[test]
+    fn test_valid_path() {
+        let mut parser = StrParser::from_str("/somerandompath/ye%3dp");
+        assert_eq!(
+            Path::parse(&mut parser),
+            Ok(Path {
+                ty: PathType::Absolute,
+                segments: vec![String::from("somerandompath"), String::from("ye=p")]
+            })
+        );
+
+        let mut parser = StrParser::from_str("somerandompath/ye%3dp");
+        assert_eq!(
+            Path::parse(&mut parser),
+            Ok(Path {
+                ty: PathType::Relative,
+                segments: vec![String::from("somerandompath"), String::from("ye=p")]
+            })
+        );
+    }
+
+    #[test]
+    fn test_valid_query() {
+        let mut parser = StrParser::from_str("?some_param=some_val");
+        let mut map = HashMap::new();
+        map.insert(String::from("some_param"), String::from("some_val"));
+        assert_eq!(Query::parse(&mut parser), Ok(Query { parameters: map }));
+
+        let mut parser = StrParser::from_str(
+            "?some_param=some_val&some_param2=some_val+some_param3=val#someflag",
+        );
+        let mut map = HashMap::new();
+        map.insert(String::from("some_param"), String::from("some_val"));
+        map.insert(String::from("some_param2"), String::from("some_val"));
+        map.insert(String::from("some_param3"), String::from("val"));
+        assert_eq!(Query::parse(&mut parser), Ok(Query { parameters: map }));
+    }
+
+    #[test]
+    fn test_valid_fragment() {
+        let mut parser = StrParser::from_str("#some_param=some_val");
+        assert_eq!(
+            Fragment::parse(&mut parser),
+            Ok(Fragment(String::from("some_param=some_val")))
+        );
+    }
+
+    #[test]
+    fn test_valid_uri() {
+        let mut parser =
+            StrParser::from_str("http://someaddress.com/apath?with=query#some_param=some_val");
+
+        let mut parameters = HashMap::new();
+        parameters.insert(String::from("with"), String::from("query"));
+        assert_eq!(
+            URI::parse(&mut parser),
+            Ok(URI {
+                scheme: Scheme(String::from("http")),
+                authority: Authority {
+                    user_info: None,
+                    host: Host::Domain(String::from("someaddress.com")),
+                    port: None
+                },
+                path: Path {
+                    ty: PathType::Absolute,
+                    segments: vec![String::from("apath")]
+                },
+                query: Some(Query { parameters }),
+                fragment: Some(Fragment(String::from("some_param=some_val")))
             })
         );
     }
