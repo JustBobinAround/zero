@@ -1,7 +1,10 @@
-use std::io::{Read, Seek};
+use std::{
+    collections::HashMap,
+    io::{Read, Seek},
+};
 use zero::parsing::{Parsable, ParseErr, ParseResult, Parser};
 
-use crate::uri::URI;
+use crate::uri::{Path, URI};
 // GET / HTTP/1.1
 // Host: 127.0.0.1:42069
 // User-Agent: curl/8.14.1
@@ -103,6 +106,22 @@ pub enum GeneralHeader {
     Warning(String),          // Section 14.46
 }
 
+impl GeneralHeader {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            GeneralHeader::CacheControl(_) => "Cache-Control", // Section 14.9
+            GeneralHeader::Connection(_) => "Connection",      // Section 14.10
+            GeneralHeader::Date(_) => "Date",                  // Section 14.18
+            GeneralHeader::Pragma(_) => "Pragma",              // Section 14.32
+            GeneralHeader::Trailer(_) => "Trailer",            // Section 14.40
+            GeneralHeader::TransferEncoding(_) => "Transfer-Encoding", // Section 14.41
+            GeneralHeader::Upgrade(_) => "Upgrade",            // Section 14.42
+            GeneralHeader::Via(_) => "Via",                    // Section 14.45
+            GeneralHeader::Warning(_) => "Warning",            // Section 14.46
+        }
+    }
+}
+
 impl FromMessageHeader for GeneralHeader {
     fn can_convert(eh: &MessageHeader) -> bool {
         let name = eh.name.as_str();
@@ -116,10 +135,11 @@ impl FromMessageHeader for GeneralHeader {
             || name == "Via"
             || name == "Warning"
     }
-    fn from_extension_header(eh: MessageHeader) -> Self {
+
+    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
         let val = eh.value;
         let name = eh.name.as_str();
-        match name {
+        let header = match name {
             "Cache-Control" => Self::CacheControl(val),
             "Connection" => Self::Connection(val),
             "Date" => Self::Date(val),
@@ -132,7 +152,9 @@ impl FromMessageHeader for GeneralHeader {
             _ => unreachable!(
                 "Failed to convert extension header. Perhaps can_convert was not checked"
             ),
-        }
+        };
+
+        (eh.name, header)
     }
 }
 
@@ -160,6 +182,32 @@ pub enum RequestHeader {
     UserAgent(String),          // Section 14.43
 }
 
+impl RequestHeader {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Accept(_) => "Accept",
+            Self::AcceptCharset(_) => "Accept-Charset",
+            Self::AcceptEncoding(_) => "Accept-Encoding",
+            Self::AcceptLanguage(_) => "Accept-Language",
+            Self::Authorization(_) => "Authorization",
+            Self::Expect(_) => "Expect",
+            Self::From(_) => "From",
+            Self::Host(_) => "Host",
+            Self::IfMatch(_) => "If-Match",
+            Self::IfModifiedSince(_) => "If-Modified-Since",
+            Self::IfNoneMatch(_) => "If-None-Match",
+            Self::IfRange(_) => "If-Range",
+            Self::IfUnmodifiedSince(_) => "If-Unmodified-Since",
+            Self::MaxForwards(_) => "Max-Forwards",
+            Self::ProxyAuthorization(_) => "Proxy-Authorization",
+            Self::Range(_) => "Range",
+            Self::Referer(_) => "Referer",
+            Self::TE(_) => "TE",
+            Self::UserAgent(_) => "User-Agent",
+        }
+    }
+}
+
 impl FromMessageHeader for RequestHeader {
     fn can_convert(eh: &MessageHeader) -> bool {
         let name = eh.name.as_str();
@@ -183,10 +231,10 @@ impl FromMessageHeader for RequestHeader {
             || name == "TE"
             || name == "User-Agent"
     }
-    fn from_extension_header(eh: MessageHeader) -> Self {
+    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
         let val = eh.value;
         let name = eh.name.as_str();
-        match name {
+        let header = match name {
             "Accept" => Self::Accept(val),
             "Accept-Charset" => Self::AcceptCharset(val),
             "Accept-Encoding" => Self::AcceptEncoding(val),
@@ -209,7 +257,9 @@ impl FromMessageHeader for RequestHeader {
             _ => unreachable!(
                 "Failed to convert extension header. Perhaps can_convert was not checked"
             ),
-        }
+        };
+
+        (eh.name, header)
     }
 }
 
@@ -228,6 +278,23 @@ pub enum EntityHeader {
     LastModified(String),    // Section 14.29
 }
 
+impl EntityHeader {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            EntityHeader::Allow(_) => "Allow", // Section 14.7
+            EntityHeader::ContentEncoding(_) => "Content-Encoding", // Section 14.11
+            EntityHeader::ContentLanguage(_) => "Content-Language", // Section 14.12
+            EntityHeader::ContentLength(_) => "Content-Length", // Section 14.13
+            EntityHeader::ContentLocation(_) => "Content-Location", // Section 14.14
+            EntityHeader::ContentMD5(_) => "Content-MD5", // Section 14.15
+            EntityHeader::ContentRange(_) => "Content-Range", // Section 14.16
+            EntityHeader::ContentType(_) => "Content-Type", // Section 14.17
+            EntityHeader::Expires(_) => "Expires", // Section 14.21
+            EntityHeader::LastModified(_) => "Last-Modified", // Section 14.29
+        }
+    }
+}
+
 impl FromMessageHeader for EntityHeader {
     fn can_convert(eh: &MessageHeader) -> bool {
         let name = eh.name.as_str();
@@ -242,10 +309,10 @@ impl FromMessageHeader for EntityHeader {
             || name == "Expires"
             || name == "Last-Modified"
     }
-    fn from_extension_header(eh: MessageHeader) -> Self {
+    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
         let val = eh.value;
         let name = eh.name.as_str();
-        match name {
+        let header = match name {
             "Allow" => Self::Allow(val),
             "Content-Encoding" => Self::ContentEncoding(val),
             "Content-Language" => Self::ContentLanguage(val),
@@ -259,13 +326,15 @@ impl FromMessageHeader for EntityHeader {
             _ => unreachable!(
                 "Failed to convert extension header. Perhaps can_convert was not checked"
             ),
-        }
+        };
+
+        (eh.name, header)
     }
 }
 
 pub trait FromMessageHeader: Sized {
     fn can_convert(eh: &MessageHeader) -> bool;
-    fn from_extension_header(eh: MessageHeader) -> Self;
+    fn from_extension_header(eh: MessageHeader) -> (String, Self);
 }
 
 /// Based on rfc2616 Section 4.2
@@ -275,7 +344,17 @@ pub struct MessageHeader {
 }
 
 impl MessageHeader {
-    pub fn into_header<T: FromMessageHeader>(self) -> T {
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn extract_name_val(self) -> (String, String) {
+        (self.name, self.value)
+    }
+}
+
+impl MessageHeader {
+    pub fn into_header<T: FromMessageHeader>(self) -> (String, T) {
         T::from_extension_header(self)
     }
 }
@@ -314,48 +393,145 @@ impl<R: Read + Seek> Parsable<R> for MessageHeader {
     }
 }
 
-pub enum Header {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HeaderType {
     GeneralHeader(GeneralHeader),
     RequestHeader(RequestHeader),
     EntityHeader(EntityHeader),
-    ExtensionHeader(MessageHeader),
+    ExtensionHeader(String),
+}
+
+pub struct Header {
+    name: String,
+    ty: HeaderType,
+}
+
+impl Header {
+    pub fn extract_name_type(self) -> (String, HeaderType) {
+        (self.name, self.ty)
+    }
 }
 
 impl<R: Read + Seek> Parsable<R> for Header {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let header = MessageHeader::parse(parser)?;
         if GeneralHeader::can_convert(&header) {
-            Ok(Self::GeneralHeader(header.into_header()))
+            let (name, header) = header.into_header();
+            Ok(Self {
+                name,
+                ty: HeaderType::GeneralHeader(header),
+            })
         } else if RequestHeader::can_convert(&header) {
-            Ok(Self::RequestHeader(header.into_header()))
+            let (name, header) = header.into_header();
+            Ok(Self {
+                name,
+                ty: HeaderType::RequestHeader(header),
+            })
         } else if EntityHeader::can_convert(&header) {
-            Ok(Self::EntityHeader(header.into_header()))
+            let (name, header) = header.into_header();
+            Ok(Self {
+                name,
+                ty: HeaderType::EntityHeader(header),
+            })
         } else {
-            Ok(Self::ExtensionHeader(header))
+            let (name, value) = header.extract_name_val();
+            Ok(Self {
+                name,
+                ty: HeaderType::ExtensionHeader(value),
+            })
         }
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct Request {
     method: RequestMethod,
-    uri: URI,
+    path: Path,
     http_version: HTTPVersion,
+    headers: HashMap<String, HeaderType>,
 }
 
 impl<R: Read + Seek> Parsable<R> for Request {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let method = RequestMethod::parse(parser)?;
         parser.skip_whitespace();
-        let uri = URI::parse(parser)?;
+        let path = Path::parse(parser)?;
         parser.skip_whitespace();
         let http_version = HTTPVersion::parse(parser)?;
         parser.skip_whitespace();
         parser.expect_crlf()?;
 
+        let mut headers = HashMap::new();
+
+        while let Ok(header) = Header::parse(parser) {
+            let (name, ty) = header.extract_name_type();
+            headers.insert(name, ty);
+        }
+
         Ok(Request {
             method,
-            uri,
+            path,
             http_version,
+            headers,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zero::parsing::StrParser;
+
+    use super::*;
+
+    #[test]
+    fn test_methods() {
+        let mut parser = StrParser::from_str("GET");
+        assert_eq!(RequestMethod::parse(&mut parser), Ok(RequestMethod::Get));
+        let mut parser = StrParser::from_str("POST");
+        assert_eq!(RequestMethod::parse(&mut parser), Ok(RequestMethod::Post));
+    }
+
+    #[test]
+    fn test_http_version() {
+        let mut parser = StrParser::from_str("HTTP/1.1");
+        assert_eq!(
+            HTTPVersion::parse(&mut parser),
+            Ok(HTTPVersion { major: 1, minor: 1 })
+        );
+    }
+
+    #[test]
+    fn test_request() {
+        let mut parser = StrParser::from_str("/");
+        let path = Path::parse(&mut parser).unwrap();
+
+        let mut parser = StrParser::from_str(
+            r#"GET / HTTP/1.1
+Host: 127.0.0.1:8000
+User-Agent: curl/8.14.1
+Accept: */*"#,
+        );
+        let mut headers = HashMap::new();
+        headers.insert(
+            String::from("Host"),
+            HeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
+        );
+        headers.insert(
+            String::from("User-Agent"),
+            HeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
+        );
+        headers.insert(
+            String::from("Accept"),
+            HeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
+        );
+        assert_eq!(
+            Request::parse(&mut parser),
+            Ok(Request {
+                method: RequestMethod::Get,
+                path,
+                http_version: HTTPVersion { major: 1, minor: 1 },
+                headers,
+            })
+        );
     }
 }

@@ -657,6 +657,17 @@ mod tests {
             })
         );
     }
+    #[test]
+    fn test_path_empty_case() {
+        let mut parser = StrParser::from_str("/");
+        assert_eq!(
+            Path::parse(&mut parser),
+            Ok(Path {
+                ty: PathType::Absolute,
+                segments: vec![]
+            })
+        );
+    }
 
     #[test]
     fn test_valid_path() {
