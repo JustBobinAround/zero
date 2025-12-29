@@ -1,4 +1,4 @@
-use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek};
 
 /// Trait to add standardized parsing methods
 pub trait Parsable<R: Read + Seek>: StreamParser<R> {
@@ -45,6 +45,7 @@ pub enum ParseErr {
     },
     InvalidPath,
     InvalidUserInfo,
+    BlankHeaderFieldName,
     NotUserInfo {
         presumed_host: String,
     }, // not really an err, just needs a breakout for an edgecase
