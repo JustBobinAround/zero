@@ -1,9 +1,9 @@
+use crate::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
 use std::{
     cmp::Ordering,
     collections::HashMap,
     io::{Read, Seek},
 };
-use zero::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
 
 /// Based on rfc3986 Section 3.1
 ///
@@ -26,7 +26,7 @@ impl Scheme {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for Scheme {
+impl<R: Read> Parsable<R> for Scheme {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         if parser.matches(|c| c.is_ascii_alphabetic()) {
             Ok(Scheme(
@@ -52,7 +52,7 @@ impl PctEncoding {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for PctEncoding {
+impl<R: Read> Parsable<R> for PctEncoding {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.consume_or_err(|c| c == b'%')?;
         let b1 = parser.consume_or_err(|c| c.is_ascii_hexdigit())?;
@@ -84,7 +84,7 @@ impl UserInfo {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for UserInfo {
+impl<R: Read> Parsable<R> for UserInfo {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let mut s = String::new();
         let mut valid = false;
@@ -132,7 +132,7 @@ pub enum Host {
 }
 
 impl Host {
-    fn parse_ip_lit<R: Read + Seek>(parser: &mut Parser<R>) -> ParseResult<Self> {
+    fn parse_ip_lit<R: Read>(parser: &mut Parser<R>) -> ParseResult<Self> {
         unimplemented!("Haven't worked on ipv6 yet, sorry")
         // parser.consume_or_err(|c| c == b'[')?;
         // parser.consume_or_err(|c| c == b']')?;
@@ -169,7 +169,7 @@ impl Host {
         }
     }
 
-    fn parse_ipv4_or_domain<R: Read + Seek>(parser: &mut Parser<R>) -> ParseResult<Self> {
+    fn parse_ipv4_or_domain<R: Read>(parser: &mut Parser<R>) -> ParseResult<Self> {
         let mut s = String::new();
 
         let mut is_ipv4 = true;
@@ -201,7 +201,7 @@ impl Host {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for Host {
+impl<R: Read> Parsable<R> for Host {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         if parser.matches(|c| c == b'[') {
             Self::parse_ip_lit(parser)
@@ -220,7 +220,7 @@ impl<R: Read + Seek> Parsable<R> for Host {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Port(u16);
 
-impl<R: Read + Seek> Parsable<R> for Port {
+impl<R: Read> Parsable<R> for Port {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.consume_or_err(|c| c == b':')?;
         let port_num_str = parser.consume_while(|p| p.is_digit());
@@ -248,7 +248,7 @@ pub struct Authority {
     port: Option<Port>,
 }
 
-impl<R: Read + Seek> Parsable<R> for Authority {
+impl<R: Read> Parsable<R> for Authority {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let (user_info, host) = match UserInfo::parse(parser) {
             Ok(user_info) => {
@@ -321,7 +321,7 @@ impl Path {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for Path {
+impl<R: Read> Parsable<R> for Path {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let mut segments = Vec::new();
         let ty = if parser.matches(|c| c == b'/') {
@@ -379,17 +379,19 @@ impl Query {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for Query {
+impl<R: Read> Parsable<R> for Query {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.consume_or_err(|c| c == b'?')?;
         let mut parameters = HashMap::new();
 
         while let Some(c) = parser.peek()
             && c != b'#'
+            && !parser.is_linear_whitespace()
         {
             let mut key = String::new();
             while let Some(c) = parser.peek()
                 && c != b'='
+                && !parser.is_linear_whitespace()
             {
                 if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
                     key.push(c as char);
@@ -407,6 +409,7 @@ impl<R: Read + Seek> Parsable<R> for Query {
 
             while let Some(c) = parser.peek()
                 && !URI::is_sub_delim(c)
+                && !parser.is_linear_whitespace()
             {
                 if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
                     val.push(c as char);
@@ -419,11 +422,12 @@ impl<R: Read + Seek> Parsable<R> for Query {
                 }
             }
 
-            if parser.matches(|c| c != b'#') {
+            parameters.insert(key, val);
+            if parser.matches(|c| c == b'#' || c.is_ascii_whitespace()) {
+                break;
+            } else {
                 parser.consume();
             }
-
-            parameters.insert(key, val);
         }
 
         Ok(Query { parameters })
@@ -451,7 +455,7 @@ impl Ord for Query {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Fragment(String);
 
-impl<R: Read + Seek> Parsable<R> for Fragment {
+impl<R: Read> Parsable<R> for Fragment {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.consume_or_err(|c| c == b'#')?;
         let mut fragment = String::new();
@@ -529,7 +533,7 @@ impl URI {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for URI {
+impl<R: Read> Parsable<R> for URI {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let scheme = Scheme::parse(parser)?;
         parser.expect_str("://")?;
@@ -560,7 +564,7 @@ impl<R: Read + Seek> Parsable<R> for URI {
 
 #[cfg(test)]
 mod tests {
-    use zero::parsing::StrParser;
+    use crate::parsing::StrParser;
 
     use super::*;
 
@@ -692,7 +696,7 @@ mod tests {
 
     #[test]
     fn test_valid_query() {
-        let mut parser = StrParser::from_str("?some_param=some_val");
+        let mut parser = StrParser::from_str("?some_param=some_val  "); //needs to break on white space for http
         let mut map = HashMap::new();
         map.insert(String::from("some_param"), String::from("some_val"));
         assert_eq!(Query::parse(&mut parser), Ok(Query { parameters: map }));

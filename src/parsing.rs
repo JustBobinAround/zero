@@ -1,18 +1,18 @@
 use std::io::{BufReader, Cursor, Read, Seek};
 
 /// Trait to add standardized parsing methods
-pub trait Parsable<R: Read + Seek>: StreamParser<R> {
+pub trait Parsable<R: Read>: StreamParser<R> {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self>;
 }
 
 /// Auto-impl trait to allow for parsing of streams.
 ///
 /// This trait was made mainly for TCP stream parsing.
-pub trait StreamParser<R: Read + Seek>: Sized {
+pub trait StreamParser<R: Read>: Sized {
     fn parse_from_stream(stream: R) -> ParseResult<Self>;
 }
 
-impl<T, R: Read + Seek> StreamParser<R> for T
+impl<T, R: Read> StreamParser<R> for T
 where
     T: Parsable<R>,
 {
@@ -27,6 +27,9 @@ where
 /// Should only be used with ParseResult Type.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParseErr {
+    InvalidStatusCode {
+        found: u16,
+    },
     InvalidRequestOption {
         found: String,
     },
@@ -81,13 +84,13 @@ pub type StrParser<'a> = Parser<Cursor<&'a str>>;
 /// are fairly universal to parsing. Although there
 /// are some protocol specific parsing methods, adding
 /// non-universal methods should be avoided.
-pub struct Parser<R: Read + Seek> {
+pub struct Parser<R: Read> {
     reader: BufReader<R>,
     idx: usize,
     peek: Option<u8>,
 }
 
-impl<R: Read + Seek> Parser<R> {
+impl<R: Read> Parser<R> {
     pub fn from_str(s: &str) -> Parser<Cursor<&str>> {
         let stream = Cursor::new(s);
         Parser {
@@ -144,6 +147,19 @@ impl<R: Read + Seek> Parser<R> {
         let mut s = String::new();
 
         while f(self) {
+            if let Some(c) = self.consume() {
+                s.push(c as char);
+            } else {
+                break;
+            }
+        }
+
+        s
+    }
+    pub fn consume_n(&mut self, n: usize) -> String {
+        let mut s = String::new();
+
+        for _ in 0..n {
             if let Some(c) = self.consume() {
                 s.push(c as char);
             } else {
@@ -337,6 +353,6 @@ impl<R: Read + Seek> Parser<R> {
     }
 
     pub fn expect_crlf(&mut self) -> ParseResult<()> {
-        self.expect_str("\n")
+        self.expect_str("\r\n")
     }
 }

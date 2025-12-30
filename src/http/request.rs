@@ -1,10 +1,9 @@
+use super::uri::{Path, Query, URI};
+use crate::parsing::{Parsable, ParseErr, ParseResult, Parser};
 use std::{
     collections::HashMap,
     io::{Read, Seek},
 };
-use zero::parsing::{Parsable, ParseErr, ParseResult, Parser};
-
-use crate::uri::{Path, URI};
 // GET / HTTP/1.1
 // Host: 127.0.0.1:42069
 // User-Agent: curl/8.14.1
@@ -40,7 +39,7 @@ pub enum RequestMethod {
     Connect,
 }
 
-impl<R: Read + Seek> Parsable<R> for RequestMethod {
+impl<R: Read> Parsable<R> for RequestMethod {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.skip_whitespace();
         let token = parser.consume_while(|p| p.is_alpha());
@@ -70,7 +69,7 @@ pub struct HTTPVersion {
     minor: u8,
 }
 
-impl<R: Read + Seek> Parsable<R> for HTTPVersion {
+impl<R: Read> Parsable<R> for HTTPVersion {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.skip_whitespace();
         parser.expect_str("HTTP/")?;
@@ -136,7 +135,7 @@ impl FromMessageHeader for GeneralHeader {
             || name == "Warning"
     }
 
-    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
+    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
         let val = eh.value;
         let name = eh.name.as_str();
         let header = match name {
@@ -154,7 +153,7 @@ impl FromMessageHeader for GeneralHeader {
             ),
         };
 
-        (eh.name, header)
+        Ok((eh.name, header))
     }
 }
 
@@ -231,7 +230,7 @@ impl FromMessageHeader for RequestHeader {
             || name == "TE"
             || name == "User-Agent"
     }
-    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
+    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
         let val = eh.value;
         let name = eh.name.as_str();
         let header = match name {
@@ -259,7 +258,7 @@ impl FromMessageHeader for RequestHeader {
             ),
         };
 
-        (eh.name, header)
+        Ok((eh.name, header))
     }
 }
 
@@ -269,7 +268,7 @@ pub enum EntityHeader {
     Allow(String),           // Section 14.7
     ContentEncoding(String), // Section 14.11
     ContentLanguage(String), // Section 14.12
-    ContentLength(String),   // Section 14.13
+    ContentLength(usize),    // Section 14.13
     ContentLocation(String), // Section 14.14
     ContentMD5(String),      // Section 14.15
     ContentRange(String),    // Section 14.16
@@ -309,14 +308,22 @@ impl FromMessageHeader for EntityHeader {
             || name == "Expires"
             || name == "Last-Modified"
     }
-    fn from_extension_header(eh: MessageHeader) -> (String, Self) {
+    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
         let val = eh.value;
         let name = eh.name.as_str();
         let header = match name {
             "Allow" => Self::Allow(val),
             "Content-Encoding" => Self::ContentEncoding(val),
             "Content-Language" => Self::ContentLanguage(val),
-            "Content-Length" => Self::ContentLength(val),
+            "Content-Length" => {
+                let length = usize::from_str_radix(val.as_str(), 10).map_err(|_| {
+                    ParseErr::FailedToParseNum {
+                        found: val,
+                        radix: 10,
+                    }
+                })?;
+                Self::ContentLength(length)
+            }
             "Content-Location" => Self::ContentLocation(val),
             "Content-MD5" => Self::ContentMD5(val),
             "Content-Range" => Self::ContentRange(val),
@@ -328,16 +335,17 @@ impl FromMessageHeader for EntityHeader {
             ),
         };
 
-        (eh.name, header)
+        Ok((eh.name, header))
     }
 }
 
 pub trait FromMessageHeader: Sized {
     fn can_convert(eh: &MessageHeader) -> bool;
-    fn from_extension_header(eh: MessageHeader) -> (String, Self);
+    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)>;
 }
 
 /// Based on rfc2616 Section 4.2
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MessageHeader {
     name: String,
     value: String,
@@ -354,12 +362,12 @@ impl MessageHeader {
 }
 
 impl MessageHeader {
-    pub fn into_header<T: FromMessageHeader>(self) -> (String, T) {
+    pub fn into_header<T: FromMessageHeader>(self) -> ParseResult<(String, T)> {
         T::from_extension_header(self)
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for MessageHeader {
+impl<R: Read> Parsable<R> for MessageHeader {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let name = parser.consume_while(|p| p.is_token_char());
         if name.len() == 0 {
@@ -371,9 +379,10 @@ impl<R: Read + Seek> Parsable<R> for MessageHeader {
         let mut parts = String::new();
         parts.push_str(
             parser
-                .consume_while(|p| !p.matches(|c| c == b'\n'))
+                .consume_while(|p| !p.matches(|c| c == b'\r'))
                 .as_str(),
         );
+        parser.consume();
 
         while let Some(c) = parser.peek()
             && c == b'\n'
@@ -383,9 +392,12 @@ impl<R: Read + Seek> Parsable<R> for MessageHeader {
                 parser.skip_whitespace();
                 parts.push_str(
                     parser
-                        .consume_while(|p| !p.matches(|c| c == b'\n'))
+                        .consume_while(|p| !p.matches(|c| c == b'\r'))
                         .as_str(),
                 );
+                parser.consume();
+            } else {
+                break;
             }
         }
 
@@ -401,6 +413,7 @@ pub enum HeaderType {
     ExtensionHeader(String),
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Header {
     name: String,
     ty: HeaderType,
@@ -412,23 +425,25 @@ impl Header {
     }
 }
 
-impl<R: Read + Seek> Parsable<R> for Header {
+impl<R: Read> Parsable<R> for Header {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        let header = MessageHeader::parse(parser)?;
+        let header = MessageHeader::parse(parser);
+        dbg!(&header);
+        let header = header?;
         if GeneralHeader::can_convert(&header) {
-            let (name, header) = header.into_header();
+            let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
                 ty: HeaderType::GeneralHeader(header),
             })
         } else if RequestHeader::can_convert(&header) {
-            let (name, header) = header.into_header();
+            let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
                 ty: HeaderType::RequestHeader(header),
             })
         } else if EntityHeader::can_convert(&header) {
-            let (name, header) = header.into_header();
+            let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
                 ty: HeaderType::EntityHeader(header),
@@ -447,39 +462,64 @@ impl<R: Read + Seek> Parsable<R> for Header {
 pub struct Request {
     method: RequestMethod,
     path: Path,
+    query: Option<Query>,
     http_version: HTTPVersion,
     headers: HashMap<String, HeaderType>,
+    body: Option<String>,
 }
 
-impl<R: Read + Seek> Parsable<R> for Request {
+impl<R: Read> Parsable<R> for Request {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let method = RequestMethod::parse(parser)?;
         parser.skip_whitespace();
         let path = Path::parse(parser)?;
+        let query = if parser.matches(|c| c == b'?') {
+            Some(Query::parse(parser)?)
+        } else {
+            None
+        };
         parser.skip_whitespace();
         let http_version = HTTPVersion::parse(parser)?;
         parser.skip_whitespace();
         parser.expect_crlf()?;
 
         let mut headers = HashMap::new();
+        let mut body_len = None;
 
         while let Ok(header) = Header::parse(parser) {
             let (name, ty) = header.extract_name_type();
+            match ty {
+                HeaderType::EntityHeader(EntityHeader::ContentLength(len)) => body_len = Some(len),
+                _ => {}
+            }
             headers.insert(name, ty);
         }
+
+        let body = match body_len {
+            Some(body_len) => {
+                parser.expect_crlf()?;
+                // eprintln!("{}", parser.peek().unwrap() as char);
+                // parser.consume_or_err(|c| c == b'\n')?;
+                // eprintln!("hit");
+                Some(parser.consume_n(body_len))
+            }
+            None => None,
+        };
 
         Ok(Request {
             method,
             path,
+            query,
             http_version,
             headers,
+            body,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use zero::parsing::StrParser;
+    use crate::parsing::StrParser;
 
     use super::*;
 
@@ -502,14 +542,13 @@ mod tests {
 
     #[test]
     fn test_request() {
-        let mut parser = StrParser::from_str("/");
+        let mut parser = StrParser::from_str("/somepath");
         let path = Path::parse(&mut parser).unwrap();
+        let mut parser = StrParser::from_str("?some=query");
+        let query = Query::parse(&mut parser).unwrap();
 
         let mut parser = StrParser::from_str(
-            r#"GET / HTTP/1.1
-Host: 127.0.0.1:8000
-User-Agent: curl/8.14.1
-Accept: */*"#,
+            "GET /somepath?some=query HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nUser-Agent: curl/8.14.1\r\nAccept: */*",
         );
         let mut headers = HashMap::new();
         headers.insert(
@@ -529,8 +568,49 @@ Accept: */*"#,
             Ok(Request {
                 method: RequestMethod::Get,
                 path,
+                query: Some(query),
                 http_version: HTTPVersion { major: 1, minor: 1 },
                 headers,
+                body: None
+            })
+        );
+    }
+    #[test]
+    fn test_request_body() {
+        let mut parser = StrParser::from_str("/somepath");
+        let path = Path::parse(&mut parser).unwrap();
+        let mut parser = StrParser::from_str("?some=query");
+        let query = Query::parse(&mut parser).unwrap();
+
+        let mut parser = StrParser::from_str(
+            "GET /somepath?some=query HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nUser-Agent: curl/8.14.1\r\nContent-Length: 14\r\nAccept: */*\r\n\r\nthis is a test    ",
+        );
+        let mut headers = HashMap::new();
+        headers.insert(
+            String::from("Host"),
+            HeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
+        );
+        headers.insert(
+            String::from("User-Agent"),
+            HeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
+        );
+        headers.insert(
+            String::from("Content-Length"),
+            HeaderType::EntityHeader(EntityHeader::ContentLength(14)),
+        );
+        headers.insert(
+            String::from("Accept"),
+            HeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
+        );
+        assert_eq!(
+            Request::parse(&mut parser),
+            Ok(Request {
+                method: RequestMethod::Get,
+                path,
+                query: Some(query),
+                http_version: HTTPVersion { major: 1, minor: 1 },
+                headers,
+                body: Some(String::from("this is a test"))
             })
         );
     }
