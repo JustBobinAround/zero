@@ -1,9 +1,9 @@
-use super::uri::{Path, Query, URI};
-use crate::parsing::prelude::*;
-use std::{
-    collections::HashMap,
-    io::{Read, Seek},
+use super::{
+    EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader,
+    uri::{Path, Query},
 };
+use crate::parsing::prelude::*;
+use std::{collections::HashMap, io::Read};
 // GET / HTTP/1.1
 // Host: 127.0.0.1:42069
 // User-Agent: curl/8.14.1
@@ -57,106 +57,6 @@ impl<R: Read> Parsable<R> for RequestMethod {
     }
 }
 
-/// Based on rfc2616 Section 3.1
-///
-/// # Augmented Backus-Naur Form
-/// ```text
-/// HTTP-Version   = "HTTP" "/" 1*DIGIT "." 1*DIGIT
-/// ```
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HTTPVersion {
-    major: u8,
-    minor: u8,
-}
-
-impl<R: Read> Parsable<R> for HTTPVersion {
-    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        parser.skip_whitespace();
-        parser.expect_str("HTTP/")?;
-        let major_str = parser.consume_while(|p| p.is_digit());
-        let major =
-            u8::from_str_radix(major_str.as_str(), 10).map_err(|_| ParseErr::FailedToParseNum {
-                found: major_str,
-                radix: 10,
-            })?;
-        parser.consume_or_err(|c| c == b'.')?;
-        let minor_str = parser.consume_while(|p| p.is_digit());
-        let minor =
-            u8::from_str_radix(minor_str.as_str(), 10).map_err(|_| ParseErr::FailedToParseNum {
-                found: minor_str,
-                radix: 10,
-            })?;
-
-        Ok(HTTPVersion { major, minor })
-    }
-}
-
-/// Based on rfc2616 Section 14
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum GeneralHeader {
-    CacheControl(String),     // Section 14.9
-    Connection(String),       // Section 14.10
-    Date(String),             // Section 14.18
-    Pragma(String),           // Section 14.32
-    Trailer(String),          // Section 14.40
-    TransferEncoding(String), // Section 14.41
-    Upgrade(String),          // Section 14.42
-    Via(String),              // Section 14.45
-    Warning(String),          // Section 14.46
-}
-
-impl GeneralHeader {
-    pub const fn name(&self) -> &'static str {
-        match self {
-            GeneralHeader::CacheControl(_) => "Cache-Control", // Section 14.9
-            GeneralHeader::Connection(_) => "Connection",      // Section 14.10
-            GeneralHeader::Date(_) => "Date",                  // Section 14.18
-            GeneralHeader::Pragma(_) => "Pragma",              // Section 14.32
-            GeneralHeader::Trailer(_) => "Trailer",            // Section 14.40
-            GeneralHeader::TransferEncoding(_) => "Transfer-Encoding", // Section 14.41
-            GeneralHeader::Upgrade(_) => "Upgrade",            // Section 14.42
-            GeneralHeader::Via(_) => "Via",                    // Section 14.45
-            GeneralHeader::Warning(_) => "Warning",            // Section 14.46
-        }
-    }
-}
-
-impl FromMessageHeader for GeneralHeader {
-    fn can_convert(eh: &MessageHeader) -> bool {
-        let name = eh.name.as_str();
-        name == "Cache-Control"
-            || name == "Connection"
-            || name == "Date"
-            || name == "Pragma"
-            || name == "Trailer"
-            || name == "Transfer-Encoding"
-            || name == "Upgrade"
-            || name == "Via"
-            || name == "Warning"
-    }
-
-    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
-        let val = eh.value;
-        let name = eh.name.as_str();
-        let header = match name {
-            "Cache-Control" => Self::CacheControl(val),
-            "Connection" => Self::Connection(val),
-            "Date" => Self::Date(val),
-            "Pragma" => Self::Pragma(val),
-            "Trailer" => Self::Trailer(val),
-            "Transfer-Encoding" => Self::TransferEncoding(val),
-            "Upgrade" => Self::Upgrade(val),
-            "Via" => Self::Via(val),
-            "Warning" => Self::Warning(val),
-            _ => unreachable!(
-                "Failed to convert extension header. Perhaps can_convert was not checked"
-            ),
-        };
-
-        Ok((eh.name, header))
-    }
-}
-
 /// Based on rfc2616 Section 14
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RequestHeader {
@@ -184,25 +84,25 @@ pub enum RequestHeader {
 impl RequestHeader {
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Accept(_) => "Accept",
-            Self::AcceptCharset(_) => "Accept-Charset",
-            Self::AcceptEncoding(_) => "Accept-Encoding",
-            Self::AcceptLanguage(_) => "Accept-Language",
-            Self::Authorization(_) => "Authorization",
-            Self::Expect(_) => "Expect",
-            Self::From(_) => "From",
-            Self::Host(_) => "Host",
-            Self::IfMatch(_) => "If-Match",
-            Self::IfModifiedSince(_) => "If-Modified-Since",
-            Self::IfNoneMatch(_) => "If-None-Match",
-            Self::IfRange(_) => "If-Range",
-            Self::IfUnmodifiedSince(_) => "If-Unmodified-Since",
-            Self::MaxForwards(_) => "Max-Forwards",
-            Self::ProxyAuthorization(_) => "Proxy-Authorization",
-            Self::Range(_) => "Range",
-            Self::Referer(_) => "Referer",
-            Self::TE(_) => "TE",
-            Self::UserAgent(_) => "User-Agent",
+            Self::Accept(_) => "accept",
+            Self::AcceptCharset(_) => "accept-charset",
+            Self::AcceptEncoding(_) => "accept-encoding",
+            Self::AcceptLanguage(_) => "accept-language",
+            Self::Authorization(_) => "authorization",
+            Self::Expect(_) => "expect",
+            Self::From(_) => "from",
+            Self::Host(_) => "host",
+            Self::IfMatch(_) => "if-match",
+            Self::IfModifiedSince(_) => "if-modified-since",
+            Self::IfNoneMatch(_) => "if-none-match",
+            Self::IfRange(_) => "if-range",
+            Self::IfUnmodifiedSince(_) => "if-unmodified-since",
+            Self::MaxForwards(_) => "max-forwards",
+            Self::ProxyAuthorization(_) => "proxy-authorization",
+            Self::Range(_) => "range",
+            Self::Referer(_) => "referer",
+            Self::TE(_) => "te",
+            Self::UserAgent(_) => "user-agent",
         }
     }
 }
@@ -210,208 +110,55 @@ impl RequestHeader {
 impl FromMessageHeader for RequestHeader {
     fn can_convert(eh: &MessageHeader) -> bool {
         let name = eh.name.as_str();
-        name == "Accept"
-            || name == "Accept-Charset"
-            || name == "Accept-Encoding"
-            || name == "Accept-Language"
-            || name == "Authorization"
-            || name == "Expect"
-            || name == "From"
-            || name == "Host"
-            || name == "If-Match"
-            || name == "If-Modified-Since"
-            || name == "If-None-Match"
-            || name == "If-Range"
-            || name == "If-Unmodified-Since"
-            || name == "Max-Forwards"
-            || name == "Proxy-Authorization"
-            || name == "Range"
-            || name == "Referer"
-            || name == "TE"
-            || name == "User-Agent"
+        name == "accept"
+            || name == "accept-charset"
+            || name == "accept-encoding"
+            || name == "accept-language"
+            || name == "authorization"
+            || name == "expect"
+            || name == "from"
+            || name == "host"
+            || name == "if-match"
+            || name == "if-modified-since"
+            || name == "if-none-match"
+            || name == "if-range"
+            || name == "if-unmodified-since"
+            || name == "max-forwards"
+            || name == "proxy-authorization"
+            || name == "range"
+            || name == "referer"
+            || name == "te"
+            || name == "user-agent"
     }
     fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
         let val = eh.value;
         let name = eh.name.as_str();
         let header = match name {
-            "Accept" => Self::Accept(val),
-            "Accept-Charset" => Self::AcceptCharset(val),
-            "Accept-Encoding" => Self::AcceptEncoding(val),
-            "Accept-Language" => Self::AcceptLanguage(val),
-            "Authorization" => Self::Authorization(val),
-            "Expect" => Self::Expect(val),
-            "From" => Self::From(val),
-            "Host" => Self::Host(val),
-            "If-Match" => Self::IfMatch(val),
-            "If-Modified-Since" => Self::IfModifiedSince(val),
-            "If-None-Match" => Self::IfNoneMatch(val),
-            "If-Range" => Self::IfRange(val),
-            "If-Unmodified-Since" => Self::IfUnmodifiedSince(val),
-            "Max-Forwards" => Self::MaxForwards(val),
-            "Proxy-Authorization" => Self::ProxyAuthorization(val),
-            "Range" => Self::Range(val),
-            "Referer" => Self::Referer(val),
-            "TE" => Self::TE(val),
-            "User-Agent" => Self::UserAgent(val),
+            "accept" => Self::Accept(val),
+            "accept-charset" => Self::AcceptCharset(val),
+            "accept-encoding" => Self::AcceptEncoding(val),
+            "accept-language" => Self::AcceptLanguage(val),
+            "authorization" => Self::Authorization(val),
+            "expect" => Self::Expect(val),
+            "from" => Self::From(val),
+            "host" => Self::Host(val),
+            "if-match" => Self::IfMatch(val),
+            "if-modified-since" => Self::IfModifiedSince(val),
+            "if-none-match" => Self::IfNoneMatch(val),
+            "if-range" => Self::IfRange(val),
+            "if-unmodified-since" => Self::IfUnmodifiedSince(val),
+            "max-forwards" => Self::MaxForwards(val),
+            "proxy-authorization" => Self::ProxyAuthorization(val),
+            "range" => Self::Range(val),
+            "referer" => Self::Referer(val),
+            "te" => Self::TE(val),
+            "user-agent" => Self::UserAgent(val),
             _ => unreachable!(
                 "Failed to convert extension header. Perhaps can_convert was not checked"
             ),
         };
 
         Ok((eh.name, header))
-    }
-}
-
-/// Based on rfc2616 Section 14
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EntityHeader {
-    Allow(String),           // Section 14.7
-    ContentEncoding(String), // Section 14.11
-    ContentLanguage(String), // Section 14.12
-    ContentLength(usize),    // Section 14.13
-    ContentLocation(String), // Section 14.14
-    ContentMD5(String),      // Section 14.15
-    ContentRange(String),    // Section 14.16
-    ContentType(String),     // Section 14.17
-    Expires(String),         // Section 14.21
-    LastModified(String),    // Section 14.29
-}
-
-impl EntityHeader {
-    pub const fn name(&self) -> &'static str {
-        match self {
-            EntityHeader::Allow(_) => "Allow", // Section 14.7
-            EntityHeader::ContentEncoding(_) => "Content-Encoding", // Section 14.11
-            EntityHeader::ContentLanguage(_) => "Content-Language", // Section 14.12
-            EntityHeader::ContentLength(_) => "Content-Length", // Section 14.13
-            EntityHeader::ContentLocation(_) => "Content-Location", // Section 14.14
-            EntityHeader::ContentMD5(_) => "Content-MD5", // Section 14.15
-            EntityHeader::ContentRange(_) => "Content-Range", // Section 14.16
-            EntityHeader::ContentType(_) => "Content-Type", // Section 14.17
-            EntityHeader::Expires(_) => "Expires", // Section 14.21
-            EntityHeader::LastModified(_) => "Last-Modified", // Section 14.29
-        }
-    }
-}
-
-impl FromMessageHeader for EntityHeader {
-    fn can_convert(eh: &MessageHeader) -> bool {
-        let name = eh.name.as_str();
-        name == "Allow"
-            || name == "Content-Encoding"
-            || name == "Content-Language"
-            || name == "Content-Length"
-            || name == "Content-Location"
-            || name == "Content-MD5"
-            || name == "Content-Range"
-            || name == "Content-Type"
-            || name == "Expires"
-            || name == "Last-Modified"
-    }
-    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
-        let val = eh.value;
-        let name = eh.name.as_str();
-        let header = match name {
-            "Allow" => Self::Allow(val),
-            "Content-Encoding" => Self::ContentEncoding(val),
-            "Content-Language" => Self::ContentLanguage(val),
-            "Content-Length" => {
-                let length = usize::from_str_radix(val.as_str(), 10).map_err(|_| {
-                    ParseErr::FailedToParseNum {
-                        found: val,
-                        radix: 10,
-                    }
-                })?;
-                Self::ContentLength(length)
-            }
-            "Content-Location" => Self::ContentLocation(val),
-            "Content-MD5" => Self::ContentMD5(val),
-            "Content-Range" => Self::ContentRange(val),
-            "Content-Type" => Self::ContentType(val),
-            "Expires" => Self::Expires(val),
-            "Last-Modified" => Self::LastModified(val),
-            _ => unreachable!(
-                "Failed to convert extension header. Perhaps can_convert was not checked"
-            ),
-        };
-
-        Ok((eh.name, header))
-    }
-}
-
-pub trait FromMessageHeader: Sized {
-    fn can_convert(eh: &MessageHeader) -> bool;
-    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)>;
-}
-
-/// Based on rfc2616 Section 4.2
-///
-/// # Augmented Backus-Naur Form
-/// ```text
-///       message-header = field-name ":" [ field-value ]
-///       field-name     = token
-///       field-value    = *( field-content | LWS )
-///       field-content  = <the OCTETs making up the field-value
-///                        and consisting of either *TEXT or combinations
-///                        of token, separators, and quoted-string>
-/// ```
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MessageHeader {
-    name: String,
-    value: String,
-}
-
-impl MessageHeader {
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    pub fn extract_name_val(self) -> (String, String) {
-        (self.name, self.value)
-    }
-}
-
-impl MessageHeader {
-    pub fn into_header<T: FromMessageHeader>(self) -> ParseResult<(String, T)> {
-        T::from_extension_header(self)
-    }
-}
-
-impl<R: Read> Parsable<R> for MessageHeader {
-    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        let name = parser.consume_while(|p| p.is_token_char());
-        if name.len() == 0 {
-            return Err(ParseErr::BlankHeaderFieldName);
-        }
-        parser.skip_whitespace();
-        parser.consume_or_err(|c| c == b':')?;
-        parser.skip_whitespace();
-        let mut parts = String::new();
-        parts.push_str(
-            parser
-                .consume_while(|p| !p.matches(|c| c == b'\r'))
-                .as_str(),
-        );
-        parser.consume();
-
-        while let Some(c) = parser.peek()
-            && c == b'\n'
-        {
-            parser.consume();
-            if parser.is_linear_whitespace() {
-                parser.skip_whitespace();
-                parts.push_str(
-                    parser
-                        .consume_while(|p| !p.matches(|c| c == b'\r'))
-                        .as_str(),
-                );
-                parser.consume();
-            } else {
-                break;
-            }
-        }
-
-        Ok(MessageHeader { name, value: parts })
     }
 }
 
@@ -428,10 +175,10 @@ impl<R: Read> Parsable<R> for MessageHeader {
 /// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RequestHeaderType {
-    GeneralHeader(GeneralHeader),
-    RequestHeader(RequestHeader),
     EntityHeader(EntityHeader),
     ExtensionHeader(String),
+    GeneralHeader(GeneralHeader),
+    RequestHeader(RequestHeader),
 }
 
 /// Abstraction used to take ownership of name to be held in header hashmap
@@ -587,15 +334,15 @@ mod tests {
         );
         let mut headers = HashMap::new();
         headers.insert(
-            String::from("Host"),
+            String::from("host"),
             RequestHeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
         );
         headers.insert(
-            String::from("User-Agent"),
+            String::from("user-agent"),
             RequestHeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
         );
         headers.insert(
-            String::from("Accept"),
+            String::from("accept"),
             RequestHeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
         );
         assert_eq!(
@@ -622,19 +369,19 @@ mod tests {
         );
         let mut headers = HashMap::new();
         headers.insert(
-            String::from("Host"),
+            String::from("host"),
             RequestHeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
         );
         headers.insert(
-            String::from("User-Agent"),
+            String::from("user-agent"),
             RequestHeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
         );
         headers.insert(
-            String::from("Content-Length"),
+            String::from("content-length"),
             RequestHeaderType::EntityHeader(EntityHeader::ContentLength(14)),
         );
         headers.insert(
-            String::from("Accept"),
+            String::from("accept"),
             RequestHeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
         );
         assert_eq!(

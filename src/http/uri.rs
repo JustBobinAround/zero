@@ -1,9 +1,5 @@
 use crate::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
-use std::{
-    cmp::Ordering,
-    collections::HashMap,
-    io::{Read, Seek},
-};
+use std::{cmp::Ordering, collections::HashMap, io::Read};
 
 /// Based on rfc3986 Section 3.1
 ///

@@ -1,5 +1,6 @@
+use super::{EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader};
 use crate::parsing::prelude::*;
-use std::io::Read;
+use std::{collections::HashMap, io::Read};
 
 /// Based on RFC 2616 section 6.1.1
 ///
@@ -57,6 +58,7 @@ use std::io::Read;
 ///
 ///       extension-code = 3DIGIT
 /// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatusCode {
     Continue,                     // "100"  ; Section 10.1.1:
     SwitchingProtocols,           // "101"  ; Section 10.1.2:
@@ -222,21 +224,128 @@ impl<R: Read> Parsable<R> for StatusCode {
     }
 }
 
+/// Based on rfc2616 Section 6.2
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+///       response-header = Accept-Ranges           ; Section 14.5
+///                       | Age                     ; Section 14.6
+///                       | ETag                    ; Section 14.19
+///                       | Location                ; Section 14.30
+///                       | Proxy-Authenticate      ; Section 14.33
+///                       | Retry-After             ; Section 14.37
+///                       | Server                  ; Section 14.38
+///                       | Vary                    ; Section 14.44
+///                       | WWW-Authenticate        ; Section 14.47
+/// ``
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResponseHeader {
+    AcceptRanges(String),      // Section 14.5
+    Age(String),               // Section 14.6
+    ETag(String),              // Section 14.19
+    Location(String),          // Section 14.30
+    ProxyAuthenticate(String), // Section 14.33
+    RetryAfter(String),        // Section 14.37
+    Server(String),            // Section 14.38
+    Vary(String),              // Section 14.44
+    WWWAuthenticate(String),   // Section 14.47
+}
+
+impl ResponseHeader {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::AcceptRanges(_) => "accept-ranges", // Section 14.5
+            Self::Age(_) => "age",                    // Section 14.6
+            Self::ETag(_) => "etag",                  // Section 14.19
+            Self::Location(_) => "location",          // Section 14.30
+            Self::ProxyAuthenticate(_) => "proxy-authenticate", // Section 14.33
+            Self::RetryAfter(_) => "retry-after",     // Section 14.37
+            Self::Server(_) => "server",              // Section 14.38
+            Self::Vary(_) => "vary",                  // Section 14.44
+            Self::WWWAuthenticate(_) => "www-authenticate", // Section 14.47
+        }
+    }
+}
+
+impl FromMessageHeader for ResponseHeader {
+    fn can_convert(eh: &MessageHeader) -> bool {
+        let name = eh.name.as_str();
+        name== "accept-ranges" // Section 14.5
+            ||name== "age"                    // Section 14.6
+            ||name== "etag"                  // Section 14.19
+            ||name== "location"          // Section 14.30
+            ||name== "proxy-authenticate" // Section 14.33
+            ||name== "retry-after"     // Section 14.37
+            ||name== "server"              // Section 14.38
+            ||name== "vary"                  // Section 14.44
+            ||name== "www-authenticate" // Section 14.47
+    }
+
+    fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
+        let val = eh.value;
+        let name = eh.name.as_str();
+        let header = match name {
+            "accept-ranges" => Self::AcceptRanges(val), // Section 14.5
+            "age" => Self::Age(val),                    // Section 14.6
+            "etag" => Self::ETag(val),                  // Section 14.19
+            "location" => Self::Location(val),          // Section 14.30
+            "proxy-authenticate" => Self::ProxyAuthenticate(val), // Section 14.33
+            "retry-after" => Self::RetryAfter(val),     // Section 14.37
+            "server" => Self::Server(val),              // Section 14.38
+            "vary" => Self::Vary(val),                  // Section 14.44
+            "www-authenticate" => Self::WWWAuthenticate(val), // Section 14.47
+            _ => unreachable!(
+                "Failed to convert extension header. Perhaps can_convert was not checked"
+            ),
+        };
+
+        Ok((eh.name, header))
+    }
+}
+/// Based on RFC 2616 section 6.1
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+/// Reason-Phrase  = *<TEXT, excluding CR, LF>
+/// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReasonPhrase(String);
+
+impl<R: Read> Parsable<R> for ReasonPhrase {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let reason = parser
+            .consume_while(|p| p.is_text() && p.peek().is_some_and(|c| c != b'\r' && c != b'\n'));
+
+        Ok(ReasonPhrase(reason))
+    }
+}
+
 /// Based on RFC 2616 section 6.1
 ///
 /// # Augmented Backus-Naur Form
 /// ```text
 /// Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
 /// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StatusLine {
+    http_version: HTTPVersion,
     status_code: StatusCode,
+    reason_phrase: ReasonPhrase,
 }
 
 impl<R: Read> Parsable<R> for StatusLine {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let http_version = HTTPVersion::parse(parser)?;
+        parser.skip_whitespace();
         let status_code = StatusCode::parse(parser)?;
+        parser.skip_whitespace();
+        let reason_phrase = ReasonPhrase::parse(parser)?;
 
-        Ok(StatusLine { status_code })
+        Ok(StatusLine {
+            http_version,
+            status_code,
+            reason_phrase,
+        })
     }
 }
 
@@ -251,4 +360,157 @@ impl<R: Read> Parsable<R> for StatusLine {
 ///                       CRLF
 ///                       [ message-body ]          ; Section 7.2
 /// ```
-pub struct Response {}
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResponseHeaderType {
+    GeneralHeader(GeneralHeader),
+    ResponseHeader(ResponseHeader),
+    EntityHeader(EntityHeader),
+    ExtensionHeader(String),
+}
+
+/// Abstraction used to take ownership of name to be held in header hashmap
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResponseHeaderMap {
+    name: String,
+    ty: ResponseHeaderType,
+}
+
+impl ResponseHeaderMap {
+    pub fn extract_name_type(self) -> (String, ResponseHeaderType) {
+        (self.name, self.ty)
+    }
+}
+
+impl<R: Read> Parsable<R> for ResponseHeaderMap {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let header = MessageHeader::parse(parser);
+        dbg!(&header);
+        let header = header?;
+        if GeneralHeader::can_convert(&header) {
+            let (name, header) = header.into_header()?;
+            Ok(Self {
+                name,
+                ty: ResponseHeaderType::GeneralHeader(header),
+            })
+        } else if ResponseHeader::can_convert(&header) {
+            let (name, header) = header.into_header()?;
+            Ok(Self {
+                name,
+                ty: ResponseHeaderType::ResponseHeader(header),
+            })
+        } else if EntityHeader::can_convert(&header) {
+            let (name, header) = header.into_header()?;
+            Ok(Self {
+                name,
+                ty: ResponseHeaderType::EntityHeader(header),
+            })
+        } else {
+            let (name, value) = header.extract_name_val();
+            Ok(Self {
+                name,
+                ty: ResponseHeaderType::ExtensionHeader(value),
+            })
+        }
+    }
+}
+/// Based on RFC 2616 section 6
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+///      Response       = Status-Line               ; Section 6.1
+///                       *(( general-header        ; Section 4.5
+///                        | response-header        ; Section 6.2
+///                        | entity-header ) CRLF)  ; Section 7.1
+///                       CRLF
+///                       [ message-body ]          ; Section 7.2
+/// ```
+#[derive(Debug, PartialEq, Eq)]
+pub struct Response {
+    status_line: StatusLine,
+    headers: HashMap<String, ResponseHeaderType>,
+    body: Option<String>,
+}
+
+impl<R: Read> Parsable<R> for Response {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let status_line = StatusLine::parse(parser)?;
+        parser.expect_crlf()?;
+
+        let mut headers = HashMap::new();
+        let mut body_len = None;
+
+        while let Ok(header) = ResponseHeaderMap::parse(parser) {
+            let (name, ty) = header.extract_name_type();
+            match ty {
+                ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(len)) => {
+                    body_len = Some(len)
+                }
+                _ => {}
+            }
+            headers.insert(name, ty);
+        }
+
+        let body = match body_len {
+            Some(body_len) => {
+                if body_len > 0 {
+                    parser.expect_crlf()?;
+                    // eprintln!("{}", parser.peek().unwrap() as char);
+                    // parser.consume_or_err(|c| c == b'\n')?;
+                    // eprintln!("hit");
+                    Some(parser.consume_n(body_len))
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        Ok(Response {
+            status_line,
+            headers,
+            body,
+        })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use crate::parsing::StrParser;
+
+    use super::*;
+
+    #[test]
+    fn test_response() {
+        let mut parser = StrParser::from_str(
+            "HTTP/1.1 200\r\ndate: Tue, 30 Dec 2025 12:06:15 GMT\r\ncontent-type: text/plain; charset=UTF-8\r\ncontent-length: 0\r\n",
+        );
+        let mut headers = HashMap::new();
+        headers.insert(
+            String::from("date"),
+            ResponseHeaderType::GeneralHeader(GeneralHeader::Date(
+                "Tue, 30 Dec 2025 12:06:15 GMT".to_string(),
+            )),
+        );
+        headers.insert(
+            String::from("content-type"),
+            ResponseHeaderType::EntityHeader(EntityHeader::ContentType(
+                "text/plain; charset=UTF-8".to_string(),
+            )),
+        );
+        headers.insert(
+            String::from("content-length"),
+            ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(0)),
+        );
+        assert_eq!(
+            Response::parse(&mut parser),
+            Ok(Response {
+                status_line: StatusLine {
+                    http_version: HTTPVersion { major: 1, minor: 1 },
+                    status_code: StatusCode::OK,
+                    reason_phrase: ReasonPhrase(String::new())
+                },
+                headers,
+                body: None
+            })
+        );
+    }
+}
