@@ -1,5 +1,8 @@
-use super::{EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader};
+use super::{
+    EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader, ToMessageHeader,
+};
 use crate::parsing::prelude::*;
+use crate::stream_writer::{StreamResult, StreamWritable};
 use std::{collections::HashMap, io::Read};
 
 /// Based on RFC 2616 section 6.1.1
@@ -104,6 +107,52 @@ pub enum StatusCode {
 }
 
 impl StatusCode {
+    // TODO: add better result for extensions
+    pub const fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Continue => Some("100"),           // "100"  ; Section 10.1.1:
+            Self::SwitchingProtocols => Some("101"), // "101"  ; Section 10.1.2:
+            Self::OK => Some("200"),                 // "200"  ; Section 10.2.1:
+            Self::Created => Some("201"),            // "201"  ; Section 10.2.2:
+            Self::Accepted => Some("202"),           // "202"  ; Section 10.2.3:
+            Self::NonAuthoritativeInformation => Some("203"), // "203"  ; Section 10.2.4:
+            Self::NoContent => Some("204"),          // "204"  ; Section 10.2.5:
+            Self::ResetContent => Some("205"),       // "205"  ; Section 10.2.6:
+            Self::PartialContent => Some("206"),     // "206"  ; Section 10.2.7:
+            Self::MultipleChoices => Some("300"),    // "300"  ; Section 10.3.1:
+            Self::MovedPermanently => Some("301"),   // "301"  ; Section 10.3.2:
+            Self::Found => Some("302"),              // "302"  ; Section 10.3.3:
+            Self::SeeOther => Some("303"),           // "303"  ; Section 10.3.4:
+            Self::NotModified => Some("304"),        // "304"  ; Section 10.3.5:
+            Self::UseProxy => Some("305"),           // "305"  ; Section 10.3.6:
+            Self::TemporaryRedirect => Some("307"),  // "307"  ; Section 10.3.8:
+            Self::BadRequest => Some("400"),         // "400"  ; Section 10.4.1:
+            Self::Unauthorized => Some("401"),       // "401"  ; Section 10.4.2:
+            Self::PaymentRequired => Some("402"),    // "402"  ; Section 10.4.3:
+            Self::Forbidden => Some("403"),          // "403"  ; Section 10.4.4:
+            Self::NotFound => Some("404"),           // "404"  ; Section 10.4.5:
+            Self::MethodNotAllowed => Some("405"),   // "405"  ; Section 10.4.6:
+            Self::NotAcceptable => Some("406"),      // "406"  ; Section 10.4.7:
+            Self::ProxyAuthenticationRequired => Some("407"), // "407"  ; Section 10.4.8:
+            Self::RequestTimeout => Some("408"),     // "408"  ; Section 10.4.9:
+            Self::Conflict => Some("409"),           // "409"  ; Section 10.4.10:
+            Self::Gone => Some("410"),               // "410"  ; Section 10.4.11:
+            Self::LengthRequired => Some("411"),     // "411"  ; Section 10.4.12:
+            Self::PreconditionFailed => Some("412"), // "412"  ; Section 10.4.13:
+            Self::RequestEntityTooLarge => Some("413"), // "413"  ; Section 10.4.14:
+            Self::RequestUriTooLarge => Some("414"), // "414"  ; Section 10.4.15:
+            Self::UnsupportedMediaType => Some("415"), // "415"  ; Section 10.4.16:
+            Self::RequestedRangeNotSatisfiable => Some("416"), // "416"  ; Section 10.4.17:
+            Self::ExpectationFailed => Some("417"),  // "417"  ; Section 10.4.18:
+            Self::InternalServerError => Some("500"), // "500"  ; Section 10.5.1:
+            Self::NotImplemented => Some("501"),     // "501"  ; Section 10.5.2:
+            Self::BadGateway => Some("502"),         // "502"  ; Section 10.5.3:
+            Self::ServiceUnavailable => Some("503"), // "503"  ; Section 10.5.4:
+            Self::GatewayTimeout => Some("504"),     // "504"  ; Section 10.5.5:
+            Self::HTTPVersionNotSupported => Some("505"), // "505"  ; Section 10.5.6:
+            Self::ExtensionCode(n) => None,
+        }
+    }
     pub const fn from_code(n: u16) -> Result<Self, ParseErr> {
         match n {
             100 => Ok(Self::Continue),                     // "100"  ; Section 10.1.1:
@@ -224,6 +273,14 @@ impl<R: Read> Parsable<R> for StatusCode {
     }
 }
 
+impl<W: std::io::Write> StreamWritable<W> for StatusCode {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        if let Some(s) = self.as_str() {
+            write!(stream, "{}", s)?;
+        }
+        Ok(())
+    }
+}
 /// Based on rfc2616 Section 6.2
 ///
 /// # Augmented Backus-Naur Form
@@ -302,6 +359,28 @@ impl FromMessageHeader for ResponseHeader {
         Ok((eh.name, header))
     }
 }
+
+impl ToMessageHeader for ResponseHeader {
+    fn consume_value_as_string(self) -> String {
+        match self {
+            Self::AcceptRanges(s) => s,      // Section 14.5
+            Self::Age(s) => s,               // Section 14.6
+            Self::ETag(s) => s,              // Section 14.19
+            Self::Location(s) => s,          // Section 14.30
+            Self::ProxyAuthenticate(s) => s, // Section 14.33
+            Self::RetryAfter(s) => s,        // Section 14.37
+            Self::Server(s) => s,            // Section 14.38
+            Self::Vary(s) => s,              // Section 14.44
+            Self::WWWAuthenticate(s) => s,   // Section 14.47
+        }
+    }
+    fn to_msg_header(self) -> MessageHeader {
+        let name = self.name().to_string();
+        let value = self.consume_value_as_string();
+
+        MessageHeader { name, value }
+    }
+}
 /// Based on RFC 2616 section 6.1
 ///
 /// # Augmented Backus-Naur Form
@@ -317,6 +396,12 @@ impl<R: Read> Parsable<R> for ReasonPhrase {
             .consume_while(|p| p.is_text() && p.peek().is_some_and(|c| c != b'\r' && c != b'\n'));
 
         Ok(ReasonPhrase(reason))
+    }
+}
+impl<W: std::io::Write> StreamWritable<W> for ReasonPhrase {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        write!(stream, "{}", self.0)?;
+        Ok(())
     }
 }
 
@@ -348,6 +433,20 @@ impl<R: Read> Parsable<R> for StatusLine {
         })
     }
 }
+impl<W: std::io::Write> StreamWritable<W> for StatusLine {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        self.http_version.write_to_stream(stream)?;
+        write!(stream, " ")?;
+        self.status_code.write_to_stream(stream)?;
+        if self.reason_phrase.0.len() > 0 {
+            write!(stream, " ")?;
+            self.reason_phrase.write_to_stream(stream)?;
+        }
+        write!(stream, "\r\n")?;
+
+        Ok(())
+    }
+}
 
 /// Based on RFC 2616 section 6
 ///
@@ -365,7 +464,25 @@ pub enum ResponseHeaderType {
     GeneralHeader(GeneralHeader),
     ResponseHeader(ResponseHeader),
     EntityHeader(EntityHeader),
-    ExtensionHeader(String),
+    ExtensionHeader { name: String, value: String },
+}
+impl ToMessageHeader for ResponseHeaderType {
+    fn consume_value_as_string(self) -> String {
+        match self {
+            Self::GeneralHeader(header) => header.consume_value_as_string(),
+            Self::ResponseHeader(header) => header.consume_value_as_string(),
+            Self::EntityHeader(header) => header.consume_value_as_string(),
+            Self::ExtensionHeader { name: _, value } => value,
+        }
+    }
+    fn to_msg_header(self) -> MessageHeader {
+        match self {
+            Self::GeneralHeader(header) => header.to_msg_header(),
+            Self::ResponseHeader(header) => header.to_msg_header(),
+            Self::EntityHeader(header) => header.to_msg_header(),
+            Self::ExtensionHeader { name, value } => MessageHeader { name, value },
+        }
+    }
 }
 
 /// Abstraction used to take ownership of name to be held in header hashmap
@@ -376,6 +493,12 @@ pub struct ResponseHeaderMap {
 }
 
 impl ResponseHeaderMap {
+    pub fn from_key_val(kv_pair: (String, ResponseHeaderType)) -> Self {
+        Self {
+            name: kv_pair.0,
+            ty: kv_pair.1,
+        }
+    }
     pub fn extract_name_type(self) -> (String, ResponseHeaderType) {
         (self.name, self.ty)
     }
@@ -407,8 +530,8 @@ impl<R: Read> Parsable<R> for ResponseHeaderMap {
         } else {
             let (name, value) = header.extract_name_val();
             Ok(Self {
-                name,
-                ty: ResponseHeaderType::ExtensionHeader(value),
+                name: name.clone(),
+                ty: ResponseHeaderType::ExtensionHeader { name, value },
             })
         }
     }
@@ -429,6 +552,29 @@ pub struct Response {
     status_line: StatusLine,
     headers: HashMap<String, ResponseHeaderType>,
     body: Option<String>,
+}
+
+impl Response {
+    pub fn test_response() -> Response {
+        let mut headers = HashMap::new();
+
+        let msg = String::from("this is a test response");
+        let msg_len = msg.len();
+
+        headers.insert(
+            String::from("content-length"),
+            ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(msg_len)),
+        );
+        Response {
+            status_line: StatusLine {
+                http_version: HTTPVersion { major: 1, minor: 1 },
+                status_code: StatusCode::OK,
+                reason_phrase: ReasonPhrase(String::new()),
+            },
+            headers: headers,
+            body: Some(msg),
+        }
+    }
 }
 
 impl<R: Read> Parsable<R> for Response {
@@ -472,6 +618,20 @@ impl<R: Read> Parsable<R> for Response {
         })
     }
 }
+impl<W: std::io::Write> StreamWritable<W> for Response {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        self.status_line.write_to_stream(stream)?;
+        for (_name, ty) in self.headers.into_iter() {
+            ty.to_msg_header().write_to_stream(stream)?
+        }
+        if let Some(body) = self.body {
+            write!(stream, "\r\n\r\n{}", body)?;
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::parsing::StrParser;

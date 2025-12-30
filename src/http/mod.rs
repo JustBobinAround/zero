@@ -3,7 +3,8 @@ pub mod response;
 pub mod uri;
 
 use crate::parsing::prelude::*;
-use std::io::Read;
+use crate::stream_writer::prelude::*;
+use std::io::{Read, Write};
 
 /// Based on rfc2616 Section 4.2
 ///
@@ -76,6 +77,13 @@ impl<R: Read> Parsable<R> for MessageHeader {
         Ok(MessageHeader { name, value: parts })
     }
 }
+impl<W: std::io::Write> StreamWritable<W> for MessageHeader {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        // TODO: pct encoding of illegal value
+        write!(stream, "{}: {}", self.name, self.value)?;
+        Ok(())
+    }
+}
 /// Based on rfc2616 Section 3.1
 ///
 /// # Augmented Backus-Naur Form
@@ -110,6 +118,18 @@ impl<R: Read> Parsable<R> for HTTPVersion {
         };
 
         Ok(HTTPVersion { major, minor })
+    }
+}
+
+impl<W: Write> StreamWritable<W> for HTTPVersion {
+    fn write_to_stream(self, stream: &mut W) -> StreamResult {
+        if self.minor == 0 {
+            write!(stream, "HTTP/{}", self.major)?;
+        } else {
+            write!(stream, "HTTP/{}.{}", self.major, self.minor)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -190,9 +210,36 @@ impl FromMessageHeader for EntityHeader {
     }
 }
 
+impl ToMessageHeader for EntityHeader {
+    fn consume_value_as_string(self) -> String {
+        match self {
+            EntityHeader::Allow(s) => s,                     // Section 14.7
+            EntityHeader::ContentEncoding(s) => s,           // Section 14.11
+            EntityHeader::ContentLanguage(s) => s,           // Section 14.12
+            EntityHeader::ContentLength(n) => n.to_string(), // Section 14.13
+            EntityHeader::ContentLocation(s) => s,           // Section 14.14
+            EntityHeader::ContentMD5(s) => s,                // Section 14.15
+            EntityHeader::ContentRange(s) => s,              // Section 14.16
+            EntityHeader::ContentType(s) => s,               // Section 14.17
+            EntityHeader::Expires(s) => s,                   // Section 14.21
+            EntityHeader::LastModified(s) => s,              // Section 14.29
+        }
+    }
+    fn to_msg_header(self) -> MessageHeader {
+        let name = self.name().to_string();
+        let value = self.consume_value_as_string();
+
+        MessageHeader { name, value }
+    }
+}
+
 pub trait FromMessageHeader: Sized {
     fn can_convert(eh: &MessageHeader) -> bool;
     fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)>;
+}
+pub trait ToMessageHeader: Sized {
+    fn consume_value_as_string(self) -> String;
+    fn to_msg_header(self) -> MessageHeader;
 }
 /// Based on rfc2616 Section 14
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -257,5 +304,27 @@ impl FromMessageHeader for GeneralHeader {
         };
 
         Ok((eh.name, header))
+    }
+}
+
+impl ToMessageHeader for GeneralHeader {
+    fn consume_value_as_string(self) -> String {
+        match self {
+            GeneralHeader::CacheControl(s) => s,     // Section 14.9
+            GeneralHeader::Connection(s) => s,       // Section 14.10
+            GeneralHeader::Date(s) => s,             // Section 14.18
+            GeneralHeader::Pragma(s) => s,           // Section 14.32
+            GeneralHeader::Trailer(s) => s,          // Section 14.40
+            GeneralHeader::TransferEncoding(s) => s, // Section 14.41
+            GeneralHeader::Upgrade(s) => s,          // Section 14.42
+            GeneralHeader::Via(s) => s,              // Section 14.45
+            GeneralHeader::Warning(s) => s,          // Section 14.46
+        }
+    }
+    fn to_msg_header(self) -> MessageHeader {
+        let name = self.name().to_string();
+        let value = self.consume_value_as_string();
+
+        MessageHeader { name, value }
     }
 }

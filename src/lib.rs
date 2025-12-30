@@ -2,3 +2,4 @@
 pub mod errors;
 pub mod http;
 pub mod parsing;
+pub mod stream_writer;
