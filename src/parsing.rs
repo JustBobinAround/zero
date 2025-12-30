@@ -1,5 +1,9 @@
 use std::io::{BufReader, Cursor, Read, Seek};
 
+pub mod prelude {
+    pub use super::{Parsable, ParseErr, ParseResult, Parser};
+}
+
 /// Trait to add standardized parsing methods
 pub trait Parsable<R: Read>: StreamParser<R> {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self>;
@@ -30,9 +34,14 @@ pub enum ParseErr {
     InvalidStatusCode {
         found: u16,
     },
+    InvalidStatusCodeStr {
+        found: u8,
+    },
+    ExpectedStatusCode,
     InvalidRequestOption {
         found: String,
     },
+    InvalidUTF8,
     InvalidScheme,
     InvalidPctEncoding {
         found: String,

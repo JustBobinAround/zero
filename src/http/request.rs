@@ -1,5 +1,5 @@
 use super::uri::{Path, Query, URI};
-use crate::parsing::{Parsable, ParseErr, ParseResult, Parser};
+use crate::parsing::prelude::*;
 use std::{
     collections::HashMap,
     io::{Read, Seek},
@@ -345,6 +345,16 @@ pub trait FromMessageHeader: Sized {
 }
 
 /// Based on rfc2616 Section 4.2
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+///       message-header = field-name ":" [ field-value ]
+///       field-name     = token
+///       field-value    = *( field-content | LWS )
+///       field-content  = <the OCTETs making up the field-value
+///                        and consisting of either *TEXT or combinations
+///                        of token, separators, and quoted-string>
+/// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MessageHeader {
     name: String,
@@ -405,27 +415,39 @@ impl<R: Read> Parsable<R> for MessageHeader {
     }
 }
 
+/// Based on RFC 2616 section 5
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+///        Request       = Request-Line              ; Section 5.1
+///                        *(( general-header        ; Section 4.5
+///                         | request-header         ; Section 5.3
+///                         | entity-header ) CRLF)  ; Section 7.1
+///                        CRLF
+///                        [ message-body ]          ; Section 4.3
+/// ```
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HeaderType {
+pub enum RequestHeaderType {
     GeneralHeader(GeneralHeader),
     RequestHeader(RequestHeader),
     EntityHeader(EntityHeader),
     ExtensionHeader(String),
 }
 
+/// Abstraction used to take ownership of name to be held in header hashmap
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Header {
+pub struct RequestHeaderMap {
     name: String,
-    ty: HeaderType,
+    ty: RequestHeaderType,
 }
 
-impl Header {
-    pub fn extract_name_type(self) -> (String, HeaderType) {
+impl RequestHeaderMap {
+    pub fn extract_name_type(self) -> (String, RequestHeaderType) {
         (self.name, self.ty)
     }
 }
 
-impl<R: Read> Parsable<R> for Header {
+impl<R: Read> Parsable<R> for RequestHeaderMap {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let header = MessageHeader::parse(parser);
         dbg!(&header);
@@ -434,37 +456,48 @@ impl<R: Read> Parsable<R> for Header {
             let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
-                ty: HeaderType::GeneralHeader(header),
+                ty: RequestHeaderType::GeneralHeader(header),
             })
         } else if RequestHeader::can_convert(&header) {
             let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
-                ty: HeaderType::RequestHeader(header),
+                ty: RequestHeaderType::RequestHeader(header),
             })
         } else if EntityHeader::can_convert(&header) {
             let (name, header) = header.into_header()?;
             Ok(Self {
                 name,
-                ty: HeaderType::EntityHeader(header),
+                ty: RequestHeaderType::EntityHeader(header),
             })
         } else {
             let (name, value) = header.extract_name_val();
             Ok(Self {
                 name,
-                ty: HeaderType::ExtensionHeader(value),
+                ty: RequestHeaderType::ExtensionHeader(value),
             })
         }
     }
 }
 
+/// Based on RFC 2616 section 5
+///
+/// # Augmented Backus-Naur Form
+/// ```text
+///        Request       = Request-Line              ; Section 5.1
+///                        *(( general-header        ; Section 4.5
+///                         | request-header         ; Section 5.3
+///                         | entity-header ) CRLF)  ; Section 7.1
+///                        CRLF
+///                        [ message-body ]          ; Section 4.3
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Request {
     method: RequestMethod,
     path: Path,
     query: Option<Query>,
     http_version: HTTPVersion,
-    headers: HashMap<String, HeaderType>,
+    headers: HashMap<String, RequestHeaderType>,
     body: Option<String>,
 }
 
@@ -486,10 +519,12 @@ impl<R: Read> Parsable<R> for Request {
         let mut headers = HashMap::new();
         let mut body_len = None;
 
-        while let Ok(header) = Header::parse(parser) {
+        while let Ok(header) = RequestHeaderMap::parse(parser) {
             let (name, ty) = header.extract_name_type();
             match ty {
-                HeaderType::EntityHeader(EntityHeader::ContentLength(len)) => body_len = Some(len),
+                RequestHeaderType::EntityHeader(EntityHeader::ContentLength(len)) => {
+                    body_len = Some(len)
+                }
                 _ => {}
             }
             headers.insert(name, ty);
@@ -553,15 +588,15 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert(
             String::from("Host"),
-            HeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
+            RequestHeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
         );
         headers.insert(
             String::from("User-Agent"),
-            HeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
+            RequestHeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
         );
         headers.insert(
             String::from("Accept"),
-            HeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
+            RequestHeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
         );
         assert_eq!(
             Request::parse(&mut parser),
@@ -588,19 +623,19 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert(
             String::from("Host"),
-            HeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
+            RequestHeaderType::RequestHeader(RequestHeader::Host(String::from("127.0.0.1:8000"))),
         );
         headers.insert(
             String::from("User-Agent"),
-            HeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
+            RequestHeaderType::RequestHeader(RequestHeader::UserAgent(String::from("curl/8.14.1"))),
         );
         headers.insert(
             String::from("Content-Length"),
-            HeaderType::EntityHeader(EntityHeader::ContentLength(14)),
+            RequestHeaderType::EntityHeader(EntityHeader::ContentLength(14)),
         );
         headers.insert(
             String::from("Accept"),
-            HeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
+            RequestHeaderType::RequestHeader(RequestHeader::Accept(String::from("*/*"))),
         );
         assert_eq!(
             Request::parse(&mut parser),
