@@ -558,12 +558,25 @@ impl Response {
     pub fn test_response() -> Response {
         let mut headers = HashMap::new();
 
-        let msg = String::from("this is a test response");
+        let msg = String::from(
+            r#"<!DOCTYPE html>
+<html>
+  <head>
+  </head>
+  <body>
+    <h1>This is a test</h1>
+  </body>
+</html>"#,
+        );
         let msg_len = msg.len();
 
         headers.insert(
             String::from("content-length"),
             ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(msg_len)),
+        );
+        headers.insert(
+            String::from("content-type"),
+            ResponseHeaderType::EntityHeader(EntityHeader::ContentType(String::from("text/html"))),
         );
         Response {
             status_line: StatusLine {
@@ -622,10 +635,11 @@ impl<W: std::io::Write> StreamWritable<W> for Response {
     fn write_to_stream(self, stream: &mut W) -> StreamResult {
         self.status_line.write_to_stream(stream)?;
         for (_name, ty) in self.headers.into_iter() {
-            ty.to_msg_header().write_to_stream(stream)?
+            ty.to_msg_header().write_to_stream(stream)?;
+            write!(stream, "\r\n")?;
         }
         if let Some(body) = self.body {
-            write!(stream, "\r\n\r\n{}", body)?;
+            write!(stream, "\r\n{}", body)?;
         }
 
         Ok(())

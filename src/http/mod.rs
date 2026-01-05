@@ -1,5 +1,6 @@
 pub mod request;
 pub mod response;
+pub mod routing;
 pub mod uri;
 
 use crate::parsing::prelude::*;

@@ -11,9 +11,7 @@ fn main() -> Result<(), ZeroErr> {
 
     for mut stream in listener.incoming() {
         let mut stream = stream.unwrap();
-        dbg!(Request::parse_from_stream(&mut stream));
         let test_response = Response::test_response();
-        dbg!(test_response.write_to_stream(&mut stream));
     }
 
     Ok(())

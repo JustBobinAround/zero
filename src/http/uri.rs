@@ -1,5 +1,10 @@
 use crate::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
-use std::{cmp::Ordering, collections::HashMap, io::Read};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    fmt::{Display, write},
+    io::Read,
+};
 
 /// Based on rfc3986 Section 3.1
 ///
@@ -275,7 +280,7 @@ impl<R: Read> Parsable<R> for Authority {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PathType {
     Relative,
     Absolute,
@@ -304,24 +309,46 @@ pub enum PathType {
 ///
 /// pchar         = unreserved / pct-encoded / sub-delims / ":" / "@"
 /// ```
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Path {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct URIPath {
     ty: PathType,
     segments: Vec<String>,
+    entire_path: String,
 }
 
-impl Path {
-    /// See Path Augmented Backus-Naur Form for justification
+impl URIPath {
+    /// See URIPath Augmented Backus-Naur Form for justification
     fn is_valid_segment(c: u8) -> bool {
         URI::is_unreserved(c) || URI::is_sub_delim(c) || c == b':' || c == b'@'
     }
+
+    pub fn path_type(&self) -> &PathType {
+        &self.ty
+    }
+
+    pub fn entire_path(&self) -> &String {
+        &self.entire_path
+    }
+
+    pub fn into_segments(self) -> Vec<String> {
+        self.segments
+    }
+    pub fn into_entire_path(self) -> String {
+        self.entire_path
+    }
+
+    pub fn to_string(self) -> String {
+        self.segments.into_iter().map(|s| s).collect()
+    }
 }
 
-impl<R: Read> Parsable<R> for Path {
+impl<R: Read> Parsable<R> for URIPath {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let mut segments = Vec::new();
+        let mut entire_path = String::new();
         let ty = if parser.matches(|c| c == b'/') {
             parser.consume();
+            entire_path.push('/');
             PathType::Absolute
         } else {
             PathType::Relative
@@ -329,13 +356,16 @@ impl<R: Read> Parsable<R> for Path {
 
         let mut s = String::new();
         while let Some(c) = parser.peek() {
-            if Path::is_valid_segment(c) {
+            if URIPath::is_valid_segment(c) {
                 s.push(c as char);
+                entire_path.push(c as char);
                 parser.consume();
             } else if c == b'%' {
                 let pct = PctEncoding::parse(parser)?;
                 s.push(pct.0);
+                entire_path.push(pct.0);
             } else if c == b'/' {
+                entire_path.push('/');
                 segments.push(s);
                 s = String::new();
                 parser.consume();
@@ -348,7 +378,11 @@ impl<R: Read> Parsable<R> for Path {
             segments.push(s);
         }
 
-        Ok(Path { ty, segments })
+        Ok(URIPath {
+            ty,
+            segments,
+            entire_path,
+        })
     }
 }
 
@@ -363,11 +397,28 @@ impl<R: Read> Parsable<R> for Path {
 ///
 /// For defensive reasons, this will error if parameter is invalid, even if RFC says otherwise when accounting for more "raw" querries.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Query {
-    parameters: HashMap<String, String>,
+pub struct RequestQuery {
+    pub parameters: HashMap<String, String>,
 }
 
-impl Query {
+impl Default for RequestQuery {
+    fn default() -> RequestQuery {
+        RequestQuery {
+            parameters: HashMap::new(),
+        }
+    }
+}
+
+impl Display for RequestQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (k, v) in self.parameters.iter() {
+            write!(f, "{}:{},\n", k, v)?;
+        }
+        Ok(())
+    }
+}
+
+impl RequestQuery {
     fn sorted_keys(&self) -> Vec<&String> {
         let mut keys: Vec<&String> = self.parameters.keys().collect();
         keys.sort();
@@ -375,9 +426,9 @@ impl Query {
     }
 }
 
-impl<R: Read> Parsable<R> for Query {
+impl<R: Read> Parsable<R> for RequestQuery {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        parser.consume_or_err(|c| c == b'?')?;
+        // parser.consume_or_err(|c| c == b'?')?;
         let mut parameters = HashMap::new();
 
         while let Some(c) = parser.peek()
@@ -389,7 +440,10 @@ impl<R: Read> Parsable<R> for Query {
                 && c != b'='
                 && !parser.is_linear_whitespace()
             {
-                if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+                if c == b'+' {
+                    key.push(' ');
+                    parser.consume();
+                } else if URIPath::is_valid_segment(c) || c == b'/' || c == b'?' {
                     key.push(c as char);
                     parser.consume();
                 } else if c == b'%' {
@@ -404,10 +458,13 @@ impl<R: Read> Parsable<R> for Query {
             let mut val = String::new();
 
             while let Some(c) = parser.peek()
-                && !URI::is_sub_delim(c)
+                && !(URI::is_sub_delim(c) && c != b'+')
                 && !parser.is_linear_whitespace()
             {
-                if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+                if c == b'+' {
+                    val.push(' ');
+                    parser.consume();
+                } else if URIPath::is_valid_segment(c) || c == b'/' || c == b'?' {
                     val.push(c as char);
                     parser.consume();
                 } else if c == b'%' {
@@ -426,17 +483,17 @@ impl<R: Read> Parsable<R> for Query {
             }
         }
 
-        Ok(Query { parameters })
+        Ok(RequestQuery { parameters })
     }
 }
 
-impl PartialOrd for Query {
+impl PartialOrd for RequestQuery {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Query {
+impl Ord for RequestQuery {
     fn cmp(&self, other: &Self) -> Ordering {
         self.sorted_keys().cmp(&other.sorted_keys())
     }
@@ -456,7 +513,7 @@ impl<R: Read> Parsable<R> for Fragment {
         parser.consume_or_err(|c| c == b'#')?;
         let mut fragment = String::new();
         while let Some(c) = parser.peek() {
-            if Path::is_valid_segment(c) || c == b'/' || c == b'?' {
+            if URIPath::is_valid_segment(c) || c == b'/' || c == b'?' {
                 fragment.push(c as char);
                 parser.consume();
             } else if c == b'%' {
@@ -496,8 +553,8 @@ impl<R: Read> Parsable<R> for Fragment {
 pub struct URI {
     scheme: Scheme,
     authority: Authority,
-    path: Path,
-    query: Option<Query>,
+    path: URIPath,
+    query: Option<RequestQuery>,
     fragment: Option<Fragment>,
 }
 
@@ -534,10 +591,11 @@ impl<R: Read> Parsable<R> for URI {
         let scheme = Scheme::parse(parser)?;
         parser.expect_str("://")?;
         let authority = Authority::parse(parser)?;
-        let path = Path::parse(parser)?;
+        let path = URIPath::parse(parser)?;
 
         let query = if parser.matches(|c| c == b'?') {
-            Some(Query::parse(parser)?)
+            parser.consume_or_err(|c| c == b'?')?;
+            Some(RequestQuery::parse(parser)?)
         } else {
             None
         };
@@ -661,10 +719,11 @@ mod tests {
     fn test_path_empty_case() {
         let mut parser = StrParser::from_str("/");
         assert_eq!(
-            Path::parse(&mut parser),
-            Ok(Path {
+            URIPath::parse(&mut parser),
+            Ok(URIPath {
                 ty: PathType::Absolute,
-                segments: vec![]
+                segments: vec![],
+                entire_path: String::from("/")
             })
         );
     }
@@ -673,38 +732,58 @@ mod tests {
     fn test_valid_path() {
         let mut parser = StrParser::from_str("/somerandompath/ye%3dp");
         assert_eq!(
-            Path::parse(&mut parser),
-            Ok(Path {
+            URIPath::parse(&mut parser),
+            Ok(URIPath {
                 ty: PathType::Absolute,
-                segments: vec![String::from("somerandompath"), String::from("ye=p")]
+                segments: vec![String::from("somerandompath"), String::from("ye=p")],
+                entire_path: String::from("/somerandompath/ye=p")
             })
         );
 
         let mut parser = StrParser::from_str("somerandompath/ye%3dp");
         assert_eq!(
-            Path::parse(&mut parser),
-            Ok(Path {
+            URIPath::parse(&mut parser),
+            Ok(URIPath {
                 ty: PathType::Relative,
-                segments: vec![String::from("somerandompath"), String::from("ye=p")]
+                segments: vec![String::from("somerandompath"), String::from("ye=p")],
+                entire_path: String::from("somerandompath/ye=p")
             })
         );
     }
 
     #[test]
     fn test_valid_query() {
-        let mut parser = StrParser::from_str("?some_param=some_val  "); //needs to break on white space for http
+        let mut parser = StrParser::from_str("some_param=some_val  "); //needs to break on white space for http
         let mut map = HashMap::new();
         map.insert(String::from("some_param"), String::from("some_val"));
-        assert_eq!(Query::parse(&mut parser), Ok(Query { parameters: map }));
+        assert_eq!(
+            RequestQuery::parse(&mut parser),
+            Ok(RequestQuery { parameters: map })
+        );
 
         let mut parser = StrParser::from_str(
-            "?some_param=some_val&some_param2=some_val+some_param3=val#someflag",
+            "some_param=some_val&some_param2=some_val&some_param3=val#someflag",
         );
         let mut map = HashMap::new();
         map.insert(String::from("some_param"), String::from("some_val"));
         map.insert(String::from("some_param2"), String::from("some_val"));
         map.insert(String::from("some_param3"), String::from("val"));
-        assert_eq!(Query::parse(&mut parser), Ok(Query { parameters: map }));
+        assert_eq!(
+            RequestQuery::parse(&mut parser),
+            Ok(RequestQuery { parameters: map })
+        );
+
+        let mut parser = StrParser::from_str(
+            "some_param=some+val&some_param2=some_val&some_param3=val#someflag",
+        );
+        let mut map = HashMap::new();
+        map.insert(String::from("some_param"), String::from("some val"));
+        map.insert(String::from("some_param2"), String::from("some_val"));
+        map.insert(String::from("some_param3"), String::from("val"));
+        assert_eq!(
+            RequestQuery::parse(&mut parser),
+            Ok(RequestQuery { parameters: map })
+        );
     }
 
     #[test]
@@ -732,11 +811,12 @@ mod tests {
                     host: Host::Domain(String::from("someaddress.com")),
                     port: None
                 },
-                path: Path {
+                path: URIPath {
                     ty: PathType::Absolute,
-                    segments: vec![String::from("apath")]
+                    segments: vec![String::from("apath")],
+                    entire_path: String::from("/apath")
                 },
-                query: Some(Query { parameters }),
+                query: Some(RequestQuery { parameters }),
                 fragment: Some(Fragment(String::from("some_param=some_val")))
             })
         );

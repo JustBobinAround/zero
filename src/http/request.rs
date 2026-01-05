@@ -1,13 +1,13 @@
 use super::{
     EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader,
-    uri::{Path, Query},
+    uri::{RequestQuery, URIPath},
 };
 use crate::parsing::prelude::*;
 use std::{collections::HashMap, io::Read};
-// GET / HTTP/1.1
-// Host: 127.0.0.1:42069
-// User-Agent: curl/8.14.1
-// Accept: */*
+
+pub trait FromRequest: Sized {
+    fn from_request(a: Request) -> Self;
+}
 
 /// Based on rfc2616 Section 5.1.1
 ///
@@ -27,8 +27,8 @@ use std::{collections::HashMap, io::Read};
 /// ```
 ///
 /// Not supporting extension methods for now
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RequestMethod {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum Method {
     Options,
     Get,
     Head,
@@ -39,19 +39,19 @@ pub enum RequestMethod {
     Connect,
 }
 
-impl<R: Read> Parsable<R> for RequestMethod {
+impl<R: Read> Parsable<R> for Method {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.skip_whitespace();
         let token = parser.consume_while(|p| p.is_alpha());
         match token.as_str() {
-            "OPTIONS" => Ok(RequestMethod::Options),
-            "GET" => Ok(RequestMethod::Get),
-            "HEAD" => Ok(RequestMethod::Head),
-            "POST" => Ok(RequestMethod::Post),
-            "PUT" => Ok(RequestMethod::Put),
-            "DELETE" => Ok(RequestMethod::Delete),
-            "TRACE" => Ok(RequestMethod::Trace),
-            "CONNECT" => Ok(RequestMethod::Connect),
+            "OPTIONS" => Ok(Method::Options),
+            "GET" => Ok(Method::Get),
+            "HEAD" => Ok(Method::Head),
+            "POST" => Ok(Method::Post),
+            "PUT" => Ok(Method::Put),
+            "DELETE" => Ok(Method::Delete),
+            "TRACE" => Ok(Method::Trace),
+            "CONNECT" => Ok(Method::Connect),
             _ => Err(ParseErr::InvalidRequestOption { found: token }),
         }
     }
@@ -227,6 +227,9 @@ impl<R: Read> Parsable<R> for RequestHeaderMap {
     }
 }
 
+pub type RequestHeaders = HashMap<String, RequestHeaderType>;
+pub type RequestBody = String;
+
 /// Based on RFC 2616 section 5
 ///
 /// # Augmented Backus-Naur Form
@@ -240,23 +243,68 @@ impl<R: Read> Parsable<R> for RequestHeaderMap {
 /// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Request {
-    method: RequestMethod,
-    path: Path,
-    query: Option<Query>,
-    http_version: HTTPVersion,
-    headers: HashMap<String, RequestHeaderType>,
-    body: Option<String>,
+    pub method: Method,
+    pub path: URIPath,
+    pub query: RequestQuery,
+    pub http_version: HTTPVersion,
+    pub headers: RequestHeaders,
+    pub body: RequestBody,
+}
+
+pub type RequestTuple = (
+    Method,
+    URIPath,
+    RequestQuery,
+    HTTPVersion,
+    HashMap<String, RequestHeaderType>,
+    String,
+);
+
+impl Request {
+    pub fn to_request_tuple(self) -> RequestTuple {
+        (
+            self.method,
+            self.path,
+            self.query,
+            self.http_version,
+            self.headers,
+            self.body,
+        )
+    }
+
+    pub fn from_request_tuple(r: RequestTuple) -> Self {
+        Request {
+            method: r.0,
+            path: r.1,
+            query: r.2,
+            http_version: r.3,
+            headers: r.4,
+            body: r.5,
+        }
+    }
+
+    pub fn method(&self) -> &Method {
+        &self.method
+    }
+
+    pub fn path(&self) -> &URIPath {
+        &self.path
+    }
+
+    pub fn method_path(&self) -> (&Method, &str) {
+        (&self.method, self.path.entire_path().as_str())
+    }
 }
 
 impl<R: Read> Parsable<R> for Request {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
-        let method = RequestMethod::parse(parser)?;
+        let method = Method::parse(parser)?;
         parser.skip_whitespace();
-        let path = Path::parse(parser)?;
+        let path = URIPath::parse(parser)?;
         let query = if parser.matches(|c| c == b'?') {
-            Some(Query::parse(parser)?)
+            RequestQuery::parse(parser)?
         } else {
-            None
+            RequestQuery::default()
         };
         parser.skip_whitespace();
         let http_version = HTTPVersion::parse(parser)?;
@@ -283,9 +331,9 @@ impl<R: Read> Parsable<R> for Request {
                 // eprintln!("{}", parser.peek().unwrap() as char);
                 // parser.consume_or_err(|c| c == b'\n')?;
                 // eprintln!("hit");
-                Some(parser.consume_n(body_len))
+                parser.consume_n(body_len)
             }
-            None => None,
+            None => String::new(),
         };
 
         Ok(Request {
@@ -308,9 +356,9 @@ mod tests {
     #[test]
     fn test_methods() {
         let mut parser = StrParser::from_str("GET");
-        assert_eq!(RequestMethod::parse(&mut parser), Ok(RequestMethod::Get));
+        assert_eq!(Method::parse(&mut parser), Ok(Method::Get));
         let mut parser = StrParser::from_str("POST");
-        assert_eq!(RequestMethod::parse(&mut parser), Ok(RequestMethod::Post));
+        assert_eq!(Method::parse(&mut parser), Ok(Method::Post));
     }
 
     #[test]
@@ -325,9 +373,9 @@ mod tests {
     #[test]
     fn test_request() {
         let mut parser = StrParser::from_str("/somepath");
-        let path = Path::parse(&mut parser).unwrap();
+        let path = URIPath::parse(&mut parser).unwrap();
         let mut parser = StrParser::from_str("?some=query");
-        let query = Query::parse(&mut parser).unwrap();
+        let query = RequestQuery::parse(&mut parser).unwrap();
 
         let mut parser = StrParser::from_str(
             "GET /somepath?some=query HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nUser-Agent: curl/8.14.1\r\nAccept: */*",
@@ -348,21 +396,21 @@ mod tests {
         assert_eq!(
             Request::parse(&mut parser),
             Ok(Request {
-                method: RequestMethod::Get,
+                method: Method::Get,
                 path,
-                query: Some(query),
+                query: query,
                 http_version: HTTPVersion { major: 1, minor: 1 },
                 headers,
-                body: None
+                body: String::new()
             })
         );
     }
     #[test]
     fn test_request_body() {
         let mut parser = StrParser::from_str("/somepath");
-        let path = Path::parse(&mut parser).unwrap();
+        let path = URIPath::parse(&mut parser).unwrap();
         let mut parser = StrParser::from_str("?some=query");
-        let query = Query::parse(&mut parser).unwrap();
+        let query = RequestQuery::parse(&mut parser).unwrap();
 
         let mut parser = StrParser::from_str(
             "GET /somepath?some=query HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nUser-Agent: curl/8.14.1\r\nContent-Length: 14\r\nAccept: */*\r\n\r\nthis is a test    ",
@@ -387,12 +435,12 @@ mod tests {
         assert_eq!(
             Request::parse(&mut parser),
             Ok(Request {
-                method: RequestMethod::Get,
+                method: Method::Get,
                 path,
-                query: Some(query),
+                query: query,
                 http_version: HTTPVersion { major: 1, minor: 1 },
                 headers,
-                body: Some(String::from("this is a test"))
+                body: String::from("this is a test")
             })
         );
     }

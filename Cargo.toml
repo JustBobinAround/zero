@@ -5,7 +5,7 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["testing_bin"]
+members = ["macros", "testing_bin"]
 
 [dependencies]
 # http = {path="./http"}
