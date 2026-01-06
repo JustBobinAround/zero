@@ -8,4 +8,4 @@ resolver = "3"
 members = ["macros", "testing_bin"]
 
 [dependencies]
-# http = {path="./http"}
+macros = {path="./macros"}
