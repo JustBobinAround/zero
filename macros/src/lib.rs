@@ -120,7 +120,7 @@ impl ExtractType {
             }
 
             let sub_seq = Self::make_extract_impl(&selections);
-            eprintln!("{}", sub_seq);
+            // eprintln!("{}", sub_seq);
 
             result.push_str(&sub_seq);
         }
@@ -176,7 +176,6 @@ enum GenericType {
     A(ExtractTrait),
     B(ExtractTrait),
     C(ExtractTrait),
-    None,
 }
 impl GenericType {
     const fn main_type_str(&self) -> &'static str {
@@ -185,7 +184,6 @@ impl GenericType {
             Self::A(_) => "A",
             Self::B(_) => "B",
             Self::C(_) => "C",
-            Self::None => "",
         }
     }
 }
@@ -196,42 +194,8 @@ impl std::fmt::Display for GenericType {
             Self::A(g) => write!(f, "A: {}", g),
             Self::B(g) => write!(f, "B: {}", g),
             Self::C(g) => write!(f, "C: {}", g),
-            Self::None => write!(f, ""),
         }
     }
-}
-
-// TODO: want to move to building extract with proc macro.
-// should be quicker and easier
-fn ordered_subsequences(s: Vec<&str>) -> String {
-    let mut result = String::new();
-    let n = s.len();
-
-    // Use bitmasking to generate all ordered subsequences
-    for mask in 1..(1 << n) {
-        let mut lines = String::new();
-
-        for i in 0..n {
-            if (mask & (1 << i)) != 0 {
-                lines.push_str(&format!("\t{},\n", s[i]));
-            }
-        }
-        lines.pop();
-        lines.pop();
-        lines.push('\n');
-
-        let sub_seq = format!("impl_extract!(|T|{{\n{}}});", lines);
-
-        let sub_seq = sub_seq.replace(
-            "|T|{\n\tinstance: Instance<T>,\n",
-            "|instance: Instance<T>|{\n",
-        );
-        eprintln!("{}", sub_seq);
-
-        result.push_str(&sub_seq);
-    }
-
-    result
 }
 
 #[proc_macro]

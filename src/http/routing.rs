@@ -1,16 +1,11 @@
 use super::{
     HTTPVersion,
     request::{Method, Request, RequestBody, RequestHeaders},
-    response::Response,
-    uri::{PathType, RequestQuery, URIPath},
+    uri::{RequestQuery, URIPath},
 };
-use crate::{
-    http::request::RequestHeaderType,
-    parsing::{StrParser, prelude::*},
-};
+use crate::parsing::{StrParser, prelude::*};
 use std::{
     collections::{HashMap, HashSet},
-    io::Read,
     sync::Arc,
 };
 
@@ -77,11 +72,13 @@ pub struct Path<T>(T);
 pub trait ToPath: Sized {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()>;
 }
+
 impl ToPath for String {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()> {
         Ok(Path(path.into_entire_path()))
     }
 }
+
 impl ToPath for Vec<String> {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()> {
         Ok(Path(path.into_segments()))
@@ -122,42 +119,43 @@ impl ToBody for HashMap<String, String> {
         Ok(Body(query.parameters))
     }
 }
+
 pub trait Extract<T, A, B>: Sized {
-    fn from_request(instance: PhantomData<T>, parts: A) -> Result<Self, ()>;
+    fn from_request(_instance: PhantomData<T>, parts: A) -> Result<Self, ()>;
 }
 
 impl<T> Extract<T, Instance<T>, Instance<T>> for Instance<T> {
-    fn from_request(instance: PhantomData<T>, req: Instance<T>) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, req: Instance<T>) -> Result<Self, ()> {
         Ok(req)
     }
 }
 
 impl<T> Extract<T, Method, Method> for Method {
-    fn from_request(instance: PhantomData<T>, req: Method) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, req: Method) -> Result<Self, ()> {
         Ok(req)
     }
 }
 
 impl<T, A: ToPath> Extract<T, URIPath, URIPath> for Path<A> {
-    fn from_request(instance: PhantomData<T>, path: URIPath) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, path: URIPath) -> Result<Self, ()> {
         A::into_path(path)
     }
 }
 
 impl<T, A: ToQuery> Extract<T, RequestQuery, RequestQuery> for Query<A> {
-    fn from_request(instance: PhantomData<T>, query: RequestQuery) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, query: RequestQuery) -> Result<Self, ()> {
         A::into_query(query)
     }
 }
 
 impl<T> Extract<T, HTTPVersion, HTTPVersion> for HTTPVersion {
-    fn from_request(instance: PhantomData<T>, version: HTTPVersion) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, version: HTTPVersion) -> Result<Self, ()> {
         Ok(version)
     }
 }
 
 impl<T> Extract<T, RequestHeaders, RequestHeaders> for RequestHeaders {
-    fn from_request(instance: PhantomData<T>, headers: RequestHeaders) -> Result<Self, ()> {
+    fn from_request(_instance: PhantomData<T>, headers: RequestHeaders) -> Result<Self, ()> {
         Ok(headers)
     }
 }
