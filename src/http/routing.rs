@@ -6,11 +6,16 @@ use super::{
 use crate::parsing::{StrParser, prelude::*};
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
     sync::Arc,
 };
 
+/// Request + Instance wrapper function that makes code generation
+/// and ownership a bit easier.
 #[derive(Debug, PartialEq, Eq)]
-pub struct InstanceRequest<T> {
+pub struct InstanceRequest<T: Send + Sync> {
     instance: Arc<T>,
     method: Method,
     path: URIPath,
@@ -20,7 +25,7 @@ pub struct InstanceRequest<T> {
     body: RequestBody,
 }
 
-impl<T> InstanceRequest<T> {
+impl<T: Send + Sync> InstanceRequest<T> {
     pub fn from_request(instance: Arc<T>, r: Request) -> Self {
         InstanceRequest {
             instance,
@@ -34,9 +39,14 @@ impl<T> InstanceRequest<T> {
     }
 }
 
-use std::{future::Future, marker::PhantomData, pin::Pin};
+/// Return type placeholder for route functions
 type ResponseResult = Result<(), ()>;
 
+/// This is a closure wrapper that allows for linking tuples of variadic
+/// arguments to a concrete function
+///
+/// Without this trait, rust cannot understand that (A, B) can be associated
+/// with Fn(A, B)...
 struct Endpoint<F, A> {
     f: F,
     _marker: PhantomData<A>,
@@ -51,24 +61,77 @@ impl<F, A> Endpoint<F, A> {
     }
 }
 
+/// Used along with `FromRequest<T>` to implement A..G variadics for route functions
+///
+/// Both this trait and `FromRequest<T>` are mainly used for a bunch of code
+/// gen. See `impl_handler` within the source code if you are curious how this
+/// works.
 pub trait Handler<A, T> {
     type Fn: Send + Sync + 'static;
 
     fn into_endpoint(self) -> Arc<dyn FromRequest<T>>;
 }
 
-// [x] method: Method,
-// [x] path: URIPath,
-// [x] query: RequestQuery,
-// [x] http_version: HTTPVersion,
-// [x] headers: RequestHeaders,
-// [ ] body: RequestBody,
-//
-// TODO: T should be restricted to Parsable
-//
+/// Used along with `Handler<A,T>` to implement A..G variadics for route functions
+///
+/// Both this trait and `Handler<A,T>` are mainly used for a bunch of code
+/// gen. See `impl_handler` within the source code if you are curious how this
+/// works.
+pub trait FromRequest<T: Send + Sync>: Send + Sync {
+    fn apply_request(&self, req: InstanceRequest<T>) -> Result<BoxFuture, ()>;
+}
+
+macro_rules! impl_handler {
+    ($($generic:ident),+) => {
+        /// This is macro generated. See actual trait documentation instead
+        impl<T, FF, Fut $(,$generic)+> Handler<($($generic,)+), T> for FF
+        where
+            T: Send + Sync,
+            FF: Fn($($generic,)+) -> Fut + Send + Sync + 'static,
+            ($($generic,)+): Extract<T, InstanceRequest<T>, ($($generic,)+)> + Send + Sync + 'static,
+            Fut: Future<Output = ResponseResult> + Send + 'static,
+        {
+            type Fn = FF;
+
+            fn into_endpoint(self) -> Arc<dyn FromRequest<T>> {
+                Arc::new(Endpoint::new(self))
+            }
+        }
+        /// This is macro generated. See actual trait documentation instead
+        impl<T, FF, Fut $(,$generic)+> FromRequest<T> for Endpoint<FF, ($($generic,)+)>
+        where
+            T: Send + Sync,
+            FF: Fn($($generic,)+) -> Fut + Send + Sync + 'static,
+            ($($generic,)+): Extract<T, InstanceRequest<T>, ($($generic,)+)> + Send + Sync + 'static,
+            Fut: Future<Output = ResponseResult> + Send + 'static,
+        {
+            fn apply_request(&self, req: InstanceRequest<T>) -> Result<BoxFuture, ()> {
+                #[allow(non_snake_case)]
+                let ($($generic,)+) = <($($generic,)+)>::from_request(PhantomData, req)?;
+                Ok(Box::pin((self.f)($($generic,)+)))
+            }
+        }
+
+    }
+}
+
+impl_handler!(A);
+impl_handler!(A, B);
+impl_handler!(A, B, C);
+impl_handler!(A, B, C, D);
+impl_handler!(A, B, C, D, E);
+impl_handler!(A, B, C, D, E, F);
+impl_handler!(A, B, C, D, E, F, G);
+
+/// This wrapper is just `Arc<T>` and allows for the instance to be shared
+/// across threads.
+///
+/// Whether to use `Mutex<T>` or `RwLock<T>` within this wrapper is up to
+/// the dev.
 pub type Instance<T> = Arc<T>;
-//rust was being dumb, idk
+
 pub struct Path<T>(T);
+
 pub trait ToPath: Sized {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()>;
 }
@@ -84,34 +147,43 @@ impl ToPath for Vec<String> {
         Ok(Path(path.into_segments()))
     }
 }
+
 impl ToPath for HashSet<String> {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()> {
-        Ok(Path(path.into_segments().into_iter().map(|s| s).collect()))
+        Ok(Path(path.into_segments().into_iter().collect()))
     }
 }
+
 pub struct Query<T: ToQuery>(T);
+
 pub trait ToQuery: Sized {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()>;
 }
+
 impl ToQuery for String {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
         Ok(Query(query.to_string()))
     }
 }
+
 impl ToQuery for HashMap<String, String> {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
         Ok(Query(query.parameters))
     }
 }
+
 pub struct Body<T: ToBody>(T);
+
 pub trait ToBody: Sized {
     fn into_body(body: RequestBody) -> Result<Body<Self>, ()>;
 }
+
 impl ToBody for String {
     fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
         Ok(Body(body))
     }
 }
+
 impl ToBody for HashMap<String, String> {
     fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
         let mut parser = StrParser::from_str(body.as_str());
@@ -120,6 +192,44 @@ impl ToBody for HashMap<String, String> {
     }
 }
 
+/// This trait helps rust figure out how to extract different combintations of tuples.
+///
+/// Outside of a few edge cases, implementations for this trait are mainly produced
+/// via the `impl_extract_permutations!` proc macro.
+///
+/// # Order matters!
+///
+/// To reduce build time / combinatorial explosiveness, this trait only implements
+/// ordered combination via proc_macro with the following order:
+///
+/// 1. Instance
+/// 2. Method
+/// 3. Path
+/// 4. Query
+/// 5. HTTPVersion
+/// 6. RequestHeaders
+/// 7. Body
+///
+/// ## Valid Example
+///
+/// ```rust
+/// async fn some_valid_route(
+///     method: Method,
+///     Query(s): Query(String)
+/// ) -> Result<(), ()> {
+///     Ok(())
+/// }
+/// ```
+/// ## Invalid Example
+///
+/// ```rust
+/// async fn some_invalid_route(
+///     Query(s): Query(String), // Query must come after method, path, etc.
+///     method: Method
+/// ) -> Result<(), ()> {
+///     Ok(())
+/// }
+/// ```
 pub trait Extract<T, A, B>: Sized {
     fn from_request(_instance: PhantomData<T>, parts: A) -> Result<Self, ()>;
 }
@@ -170,66 +280,12 @@ macros::impl_extract_permutations!();
 
 type BoxFuture = Pin<Box<dyn Future<Output = ResponseResult> + Send>>;
 
-pub trait FromRequest<T> {
-    fn apply_request(&self, req: InstanceRequest<T>) -> Result<BoxFuture, ()>;
-}
-
-impl<FF, Fut, A, T> FromRequest<T> for Endpoint<FF, (A,)>
-where
-    FF: Fn(A) -> Fut + Send + Sync + 'static,
-    (A,): Extract<T, InstanceRequest<T>, (A,)> + 'static,
-    Fut: Future<Output = ResponseResult> + Send + 'static,
-{
-    fn apply_request(&self, req: InstanceRequest<T>) -> Result<BoxFuture, ()> {
-        let (a,) = <(A,)>::from_request(PhantomData, req)?;
-        Ok(Box::pin((&self.f)(a)))
-    }
-}
-impl<FF, Fut, A, B, T> FromRequest<T> for Endpoint<FF, (A, B)>
-where
-    FF: Fn(A, B) -> Fut + Send + Sync + 'static,
-    (A, B): Extract<T, InstanceRequest<T>, (A, B)> + 'static,
-    Fut: Future<Output = ResponseResult> + Send + 'static,
-{
-    fn apply_request(&self, req: InstanceRequest<T>) -> Result<BoxFuture, ()> {
-        let (a, b) = <(A, B)>::from_request(PhantomData, req)?;
-        Ok(Box::pin((self.f)(a, b)))
-    }
-}
-
-impl<FF, Fut, A, T> Handler<(A,), T> for FF
-where
-    A: Extract<T, A, A>,
-    FF: Fn(A) -> Fut + Send + Sync + 'static,
-    (A,): Extract<T, InstanceRequest<T>, (A,)> + 'static,
-    Fut: Future<Output = ResponseResult> + Send + 'static,
-{
-    type Fn = FF;
-
-    fn into_endpoint(self) -> Arc<dyn FromRequest<T>> {
-        Arc::new(Endpoint::new(self))
-    }
-}
-
-impl<FF, Fut, A, B, T> Handler<(A, B), T> for FF
-where
-    FF: Fn(A, B) -> Fut + Send + Sync + 'static,
-    (A, B): Extract<T, InstanceRequest<T>, (A, B)> + 'static,
-    Fut: Future<Output = ResponseResult> + Send + 'static,
-{
-    type Fn = FF;
-
-    fn into_endpoint(self) -> Arc<dyn FromRequest<T>> {
-        Arc::new(Endpoint::new(self))
-    }
-}
-
-pub struct Router<T> {
+pub struct Router<T: Send + Sync> {
     instance: Arc<T>,
     routes: HashMap<(&'static Method, &'static str), Arc<dyn FromRequest<T>>>,
 }
 
-impl<T> Router<T> {
+impl<T: Send + Sync> Router<T> {
     pub fn new(instance: T) -> Self {
         Router {
             instance: instance.into(),
@@ -246,6 +302,8 @@ impl<T> Router<T> {
     const TRACE: &'static Method = &Method::Trace;
     const CONNECT: &'static Method = &Method::Connect;
 
+    /// This method is subject to change as role based
+    /// routing is probably going to be a thing.
     pub fn route<A>(mut self, method: Method, s: &'static str, f: impl Handler<A, T>) -> Self {
         let m = match method {
             Method::Options => Self::OPTIONS,

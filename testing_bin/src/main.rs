@@ -1,18 +1,21 @@
-use std::net::TcpListener;
-use zero::errors::ZeroErr;
-use zero::http::{request::Request, response::Response};
-use zero::{
-    parsing::{Parsable, StreamParser},
-    stream_writer::StreamWritable,
-};
+// use std::net::TcpListener;
+// use zero::http::response::Response;
+use zero::http::{routing::Router, server::HttpServer};
 
-fn main() -> Result<(), ZeroErr> {
-    let listener = TcpListener::bind("127.0.0.1:8000").map_err(|e| ZeroErr::FailedToOpen)?;
+// async_main!(() -> Result<(), ZeroErr> {
+//     // let listener = TcpListener::bind("127.0.0.1:8000").map_err(|e| ZeroErr::FailedToOpen)?;
+//     //
 
-    for mut stream in listener.incoming() {
-        let mut stream = stream.unwrap();
-        let test_response = Response::test_response();
-    }
+//     Ok(())
+// });
+
+#[zero::main]
+async fn main() -> Result<(), ()> {
+    let router = Router::new(());
+
+    let mut server = HttpServer::from_router(router);
+
+    let serve = server.serve("127.0.0.1:8000").await;
 
     Ok(())
 }

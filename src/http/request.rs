@@ -316,11 +316,8 @@ impl<R: Read> Parsable<R> for Request {
 
         while let Ok(header) = RequestHeaderMap::parse(parser) {
             let (name, ty) = header.extract_name_type();
-            match ty {
-                RequestHeaderType::EntityHeader(EntityHeader::ContentLength(len)) => {
-                    body_len = Some(len)
-                }
-                _ => {}
+            if let RequestHeaderType::EntityHeader(EntityHeader::ContentLength(len)) = ty {
+                body_len = Some(len)
             }
             headers.insert(name, ty);
         }

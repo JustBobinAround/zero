@@ -1,6 +1,7 @@
 pub mod request;
 pub mod response;
 pub mod routing;
+pub mod server;
 pub mod uri;
 
 use crate::parsing::prelude::*;
@@ -44,7 +45,7 @@ impl<R: Read> Parsable<R> for MessageHeader {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let name = parser.consume_while(|p| p.is_token_char());
         let name = name.to_ascii_lowercase();
-        if name.len() == 0 {
+        if name.is_empty() {
             return Err(ParseErr::BlankHeaderFieldName);
         }
         parser.skip_whitespace();
@@ -109,7 +110,7 @@ impl<R: Read> Parsable<R> for HTTPVersion {
             })?;
         parser.consume_or_err(|c| c == b'.')?;
         let minor_str = parser.consume_while(|p| p.is_digit());
-        let minor = if minor_str == "" {
+        let minor = if minor_str.is_empty() {
             0
         } else {
             u8::from_str_radix(minor_str.as_str(), 10).map_err(|_| ParseErr::FailedToParseNum {

@@ -150,7 +150,7 @@ impl StatusCode {
             Self::ServiceUnavailable => Some("503"), // "503"  ; Section 10.5.4:
             Self::GatewayTimeout => Some("504"),     // "504"  ; Section 10.5.5:
             Self::HTTPVersionNotSupported => Some("505"), // "505"  ; Section 10.5.6:
-            Self::ExtensionCode(n) => None,
+            Self::ExtensionCode(_) => None,
         }
     }
     pub const fn from_code(n: u16) -> Result<Self, ParseErr> {
@@ -438,7 +438,7 @@ impl<W: std::io::Write> StreamWritable<W> for StatusLine {
         self.http_version.write_to_stream(stream)?;
         write!(stream, " ")?;
         self.status_code.write_to_stream(stream)?;
-        if self.reason_phrase.0.len() > 0 {
+        if !self.reason_phrase.0.is_empty() {
             write!(stream, " ")?;
             self.reason_phrase.write_to_stream(stream)?;
         }
@@ -584,7 +584,7 @@ impl Response {
                 status_code: StatusCode::OK,
                 reason_phrase: ReasonPhrase(String::new()),
             },
-            headers: headers,
+            headers,
             body: Some(msg),
         }
     }
@@ -600,11 +600,8 @@ impl<R: Read> Parsable<R> for Response {
 
         while let Ok(header) = ResponseHeaderMap::parse(parser) {
             let (name, ty) = header.extract_name_type();
-            match ty {
-                ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(len)) => {
-                    body_len = Some(len)
-                }
-                _ => {}
+            if let ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(len)) = ty {
+                body_len = Some(len)
             }
             headers.insert(name, ty);
         }

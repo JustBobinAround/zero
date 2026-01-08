@@ -1,10 +1,5 @@
 use crate::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
-use std::{
-    cmp::Ordering,
-    collections::HashMap,
-    fmt::{Display, write},
-    io::Read,
-};
+use std::{cmp::Ordering, collections::HashMap, fmt::Display, io::Read};
 
 /// Based on rfc3986 Section 3.1
 ///
@@ -90,13 +85,7 @@ impl<R: Read> Parsable<R> for UserInfo {
         let mut s = String::new();
         let mut valid = false;
         while let Some(c) = parser.peek() {
-            if URI::is_unreserved(c) {
-                s.push(c as char);
-                parser.consume();
-            } else if URI::is_sub_delim(c) {
-                s.push(c as char);
-                parser.consume();
-            } else if c == b':' {
+            if URI::is_unreserved(c) || URI::is_sub_delim(c) || c == b':' {
                 s.push(c as char);
                 parser.consume();
             } else if c == b'%' {
@@ -133,7 +122,7 @@ pub enum Host {
 }
 
 impl Host {
-    fn parse_ip_lit<R: Read>(parser: &mut Parser<R>) -> ParseResult<Self> {
+    fn parse_ip_lit<R: Read>(_parser: &mut Parser<R>) -> ParseResult<Self> {
         unimplemented!("Haven't worked on ipv6 yet, sorry")
         // parser.consume_or_err(|c| c == b'[')?;
         // parser.consume_or_err(|c| c == b']')?;
@@ -336,10 +325,6 @@ impl URIPath {
     pub fn into_entire_path(self) -> String {
         self.entire_path
     }
-
-    pub fn to_string(self) -> String {
-        self.segments.into_iter().map(|s| s).collect()
-    }
 }
 
 impl<R: Read> Parsable<R> for URIPath {
@@ -374,7 +359,7 @@ impl<R: Read> Parsable<R> for URIPath {
             }
         }
 
-        if s.len() > 0 {
+        if !s.is_empty() {
             segments.push(s);
         }
 
@@ -396,23 +381,15 @@ impl<R: Read> Parsable<R> for URIPath {
 /// This struct assumes standardization of query parameters which is technically not true.
 ///
 /// For defensive reasons, this will error if parameter is invalid, even if RFC says otherwise when accounting for more "raw" querries.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct RequestQuery {
     pub parameters: HashMap<String, String>,
-}
-
-impl Default for RequestQuery {
-    fn default() -> RequestQuery {
-        RequestQuery {
-            parameters: HashMap::new(),
-        }
-    }
 }
 
 impl Display for RequestQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (k, v) in self.parameters.iter() {
-            write!(f, "{}:{},\n", k, v)?;
+            writeln!(f, "{}:{},", k, v)?;
         }
         Ok(())
     }

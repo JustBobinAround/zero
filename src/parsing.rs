@@ -1,4 +1,4 @@
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::{BufReader, Cursor, Read};
 
 pub mod prelude {
     pub use super::{Parsable, ParseErr, ParseResult, Parser};
@@ -335,7 +335,7 @@ impl<R: Read> Parser<R> {
     }
 
     pub fn matches<F: Fn(u8) -> bool>(&mut self, f: F) -> bool {
-        self.peek().is_some_and(|c| f(c))
+        self.peek().is_some_and(f)
     }
 
     pub fn consume_or_err<F: Fn(u8) -> bool>(&mut self, f: F) -> ParseResult<u8> {
@@ -349,7 +349,7 @@ impl<R: Read> Parser<R> {
 
     pub fn expect_str(&mut self, s: &str) -> ParseResult<()> {
         for c in s.bytes() {
-            if !self.consume().is_some_and(|found| c == found) {
+            if self.consume().is_none_or(|found| c != found) {
                 return Err(ParseErr::ExpectedStr {
                     expected: s.to_string(),
                     found_char: c as char,
