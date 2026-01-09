@@ -1,7 +1,7 @@
 use super::{
-    HTTPVersion,
+    Body, HTTPVersion, ToBody,
     request::{Method, Request, RequestBody, RequestHeaders},
-    response::{Response, ResponseHeaderType, StatusCode},
+    response::{Response as FullResponse, ResponseHeaderType, StatusCode, StatusLine},
     uri::{RequestQuery, URIPath},
 };
 use crate::parsing::{StrParser, prelude::*};
@@ -37,6 +37,116 @@ impl<T: Send + Sync> InstanceRequest<T> {
             headers: r.headers,
             body: r.body,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Response {
+    status: Option<StatusCode>,
+    headers: Option<HashMap<String, ResponseHeaderType>>,
+    body: Option<String>,
+}
+
+impl From<()> for Response {
+    fn from(_: ()) -> Self {
+        Response {
+            status: None,
+            headers: None,
+            body: None,
+        }
+    }
+}
+
+impl From<StatusCode> for Response {
+    fn from(status: StatusCode) -> Self {
+        Response {
+            status: Some(status),
+            headers: None,
+            body: None,
+        }
+    }
+}
+
+impl From<HashMap<String, ResponseHeaderType>> for Response {
+    fn from(headers: HashMap<String, ResponseHeaderType>) -> Self {
+        Response {
+            status: None,
+            headers: Some(headers),
+            body: None,
+        }
+    }
+}
+
+impl From<String> for Response {
+    fn from(body: String) -> Self {
+        Response {
+            status: None,
+            headers: None,
+            body: Some(body),
+        }
+    }
+}
+
+impl From<&str> for Response {
+    fn from(body: &str) -> Self {
+        Response {
+            status: None,
+            headers: None,
+            body: Some(body.to_string()),
+        }
+    }
+}
+
+impl From<(StatusCode, HashMap<String, ResponseHeaderType>)> for Response {
+    fn from((status, headers): (StatusCode, HashMap<String, ResponseHeaderType>)) -> Self {
+        Response {
+            status: Some(status),
+            headers: Some(headers),
+            body: None,
+        }
+    }
+}
+
+impl From<(StatusCode, String)> for Response {
+    fn from((status, body): (StatusCode, String)) -> Self {
+        Response {
+            status: Some(status),
+            headers: None,
+            body: Some(body),
+        }
+    }
+}
+
+impl From<(StatusCode, HashMap<String, ResponseHeaderType>, String)> for Response {
+    fn from(
+        (status, headers, body): (StatusCode, HashMap<String, ResponseHeaderType>, String),
+    ) -> Self {
+        Response {
+            status: Some(status),
+            headers: Some(headers),
+            body: Some(body),
+        }
+    }
+}
+
+impl From<Result<Response, Response>> for FullResponse {
+    fn from(r: Result<Response, Response>) -> Self {
+        let (status_code, headers, body) = match r {
+            Ok(r) => match (r.status, r.headers, r.body) {
+                (Some(s), Some(h), b) => (s, h, b),
+                (None, Some(h), b) => (StatusCode::OK, h, b),
+                (Some(s), None, b) => (s, HashMap::new(), b),
+                (None, None, b) => (StatusCode::OK, HashMap::new(), b),
+            },
+            Err(r) => match (r.status, r.headers, r.body) {
+                (Some(s), Some(h), b) => (s, h, b),
+                (None, Some(h), b) => (StatusCode::InternalServerError, h, b),
+                (Some(s), None, b) => (s, HashMap::new(), b),
+                (None, None, b) => (StatusCode::InternalServerError, HashMap::new(), b),
+            },
+        };
+
+        FullResponse::new(status_code, headers, body)
     }
 }
 
@@ -198,26 +308,6 @@ impl ToQuery for HashMap<String, String> {
     }
 }
 
-pub struct Body<T: ToBody>(T);
-
-pub trait ToBody: Sized {
-    fn into_body(body: RequestBody) -> Result<Body<Self>, ()>;
-}
-
-impl ToBody for String {
-    fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
-        Ok(Body(body))
-    }
-}
-
-impl ToBody for HashMap<String, String> {
-    fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
-        let mut parser = StrParser::from_str(body.as_str());
-        let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
-        Ok(Body(query.parameters))
-    }
-}
-
 /// This trait helps rust figure out how to extract different combintations of tuples.
 ///
 /// Outside of a few edge cases, implementations for this trait are mainly produced
@@ -350,24 +440,17 @@ impl<T: Send + Sync> Router<T> {
         self
     }
 
-    pub async fn apply_request(&self, req: Request) -> Response {
+    pub async fn apply_request(&self, req: Request) -> FullResponse {
         let handle = match self.routes.get(&req.method_path()) {
             Some(handle) => handle.clone(),
-            None => return Response::new_simple(StatusCode::InternalServerError, None),
+            None => return FullResponse::new_simple(StatusCode::NotFound, None),
         };
 
         let req = InstanceRequest::from_request(self.instance.clone(), req);
 
-        // TODO: default status codes
-
-        let response_result = match handle.apply_request(req) {
-            Ok(r) => r.await,
-            Err(_) => return Response::new_simple(StatusCode::InternalServerError, None),
-        };
-
-        match response_result {
-            Ok(r) => r,
-            Err(r) => r,
+        match handle.apply_request(req) {
+            Ok(r) => r.await.into(),
+            Err(_) => FullResponse::new_simple(StatusCode::InternalServerError, None),
         }
     }
 }
@@ -383,13 +466,12 @@ mod tests {
         //     Ok(())
         // }
 
-        async fn method_handler(method: Method) -> Result<(), ()> {
-            dbg!(method);
-            Ok(())
+        async fn method_handler(method: Method) -> ResponseResult {
+            Ok("this is a test".into())
         }
-        async fn method_handler2(instance: Arc<usize>) -> Result<(), ()> {
+        async fn method_handler2(instance: Arc<usize>) -> ResponseResult {
             dbg!(instance);
-            Ok(())
+            Ok(().into())
         }
         // async fn query_handler(Path(s): Path<String>) -> Result<(), ()> {
         //     dbg!(s);
@@ -404,7 +486,7 @@ mod tests {
         // FIXME: need to implement from variadics to response trait
         //
         // e.g.
-        // impl From<(A, B)> for Response {
+        // impl From<(A, B)> for FullResponse {
         //     fn from((a, b): (A, B)) -> Self {
         //         //DO STUFF
         //     }

@@ -1,5 +1,7 @@
+use std::io::Write;
 use std::{net::TcpListener, thread::JoinHandle};
 
+use crate::stream_writer::StreamWritable;
 use crate::{errors::ZeroErr, http::request::Request, parsing::StreamParser};
 
 use super::routing::Router;
@@ -32,7 +34,8 @@ impl<T: Send + Sync> HttpServer<T> {
                     let router = self.router.clone();
                     match Request::parse_from_stream(&mut stream) {
                         Ok(request) => {
-                            router.apply_request(request).await;
+                            let response = router.apply_request(request).await;
+                            let _ = response.write_to_stream(&mut stream);
                         }
                         Err(_) => {}
                     }

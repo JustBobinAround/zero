@@ -4,9 +4,38 @@ pub mod routing;
 pub mod server;
 pub mod uri;
 
+use crate::http::uri::RequestQuery;
+use crate::parsing::StrParser;
 use crate::parsing::prelude::*;
 use crate::stream_writer::prelude::*;
+use std::collections::HashMap;
 use std::io::{Read, Write};
+
+pub struct Body<T: ToBody>(T);
+
+impl std::fmt::Display for Body<String> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub trait ToBody: Sized {
+    fn into_body(body: String) -> Result<Body<Self>, ()>;
+}
+
+impl ToBody for String {
+    fn into_body(body: String) -> Result<Body<Self>, ()> {
+        Ok(Body(body))
+    }
+}
+
+impl ToBody for HashMap<String, String> {
+    fn into_body(body: String) -> Result<Body<Self>, ()> {
+        let mut parser = StrParser::from_str(body.as_str());
+        let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
+        Ok(Body(query.parameters))
+    }
+}
 
 /// Based on rfc2616 Section 4.2
 ///

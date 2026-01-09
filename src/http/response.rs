@@ -1,6 +1,7 @@
 use super::{
     EntityHeader, FromMessageHeader, GeneralHeader, HTTPVersion, MessageHeader, ToMessageHeader,
 };
+use crate::http::{Body, ToBody};
 use crate::parsing::prelude::*;
 use crate::stream_writer::{StreamResult, StreamWritable};
 use std::{collections::HashMap, io::Read};

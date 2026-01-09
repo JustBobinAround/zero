@@ -14,23 +14,23 @@ use zero::http::{
 // });
 
 pub async fn index() -> ResponseResult {
-    Ok(())
+    Err("this is a test".into())
 }
 #[zero::main]
 async fn main() -> Result<(), ()> {
-    let router = Router::new(()).route(Method::Get, "", index);
+    let router = Router::new(()).route(Method::Get, "/", index);
 
     let mut server = HttpServer::from_router(router);
 
     let serve = server.serve("127.0.0.1:8000").await;
-    zero::html!(
-        p (
-            a: "asdf",
-            b: asdf,
-        ){
-            lkj
-        }
-    );
+    // zero::html!(
+    //     p (
+    //         a: "asdf",
+    //         b: asdf,
+    //     ){
+    //         lkj
+    //     }
+    // );
 
     Ok(())
 }
