@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 pub mod async_runtime;
 pub mod errors;
+pub mod html;
 pub mod http;
 pub mod parsing;
 pub mod stream_writer;
@@ -31,4 +32,4 @@ pub mod variadics;
 ///
 /// Additionally, this macro expects the crate to have a name of "zero". Anything
 /// else will break the macro.
-pub use macros::main;
+pub use macros::{html, main};

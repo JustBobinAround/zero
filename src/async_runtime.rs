@@ -1,56 +1,60 @@
-// use std::net::TcpListener;
-// use zero::http::response::Response;
 use std::{
     future::Future,
-    ptr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
-type WakerData = *const ();
-static ZERO_ASYNC_VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-
-pub trait Runtime: Sized {
-    type Output;
-    fn run_async(self) -> Self::Output;
-    fn fetch_raw_waker() -> RawWaker {
-        RawWaker::new(ptr::null(), &ZERO_ASYNC_VTABLE)
-    }
-    fn fetch_waker() -> Waker;
+/// Shared wake flag
+struct WakeFlag {
+    woke: AtomicBool,
 }
 
-unsafe fn clone(_: WakerData) -> RawWaker {
-    RawWaker::new(ptr::null(), &ZERO_ASYNC_VTABLE)
+type WakerData = Arc<WakeFlag>;
+
+static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker);
+
+unsafe fn clone(data: *const ()) -> RawWaker {
+    let arc = unsafe { WakerData::from_raw(data as *const WakeFlag) };
+    let cloned = arc.clone();
+    std::mem::forget(arc);
+    RawWaker::new(Arc::into_raw(cloned) as *const (), &VTABLE)
 }
-unsafe fn wake(_: WakerData) {}
-unsafe fn wake_by_ref(_: WakerData) {}
-unsafe fn drop(_: WakerData) {}
 
-impl<F> Runtime for F
-where
-    F: Future,
-{
-    type Output = F::Output;
-    fn run_async(self) -> Self::Output {
-        let waker = Self::fetch_waker();
-        let mut context = Context::from_waker(&waker);
+unsafe fn wake(data: *const ()) {
+    let arc = unsafe { WakerData::from_raw(data as *const WakeFlag) };
+    arc.woke.store(true, Ordering::Release);
+}
 
-        let mut t = Box::pin(self);
-        let t = t.as_mut();
+unsafe fn wake_by_ref(data: *const ()) {
+    let arc = unsafe { &*(data as *const WakeFlag) };
+    arc.woke.store(true, Ordering::Release);
+}
 
-        loop {
-            match t.poll(&mut context) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => {
-                    unimplemented!("pending futures")
-                }
+unsafe fn drop_waker(data: *const ()) {
+    drop(unsafe { WakerData::from_raw(data as *const WakeFlag) });
+}
+
+/// Minimal executor
+pub fn run<F: Future>(future: F) -> F::Output {
+    let wake_flag = Arc::new(WakeFlag {
+        woke: AtomicBool::new(true), // start "woken"
+    });
+
+    let raw_waker = RawWaker::new(Arc::into_raw(wake_flag.clone()) as *const (), &VTABLE);
+    let waker = unsafe { Waker::from_raw(raw_waker) };
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = Box::pin(future);
+
+    loop {
+        if wake_flag.woke.swap(false, Ordering::Acquire) {
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(val) => return val,
+                Poll::Pending => {}
             }
         }
-    }
-
-    fn fetch_raw_waker() -> RawWaker {
-        RawWaker::new(ptr::null(), &ZERO_ASYNC_VTABLE)
-    }
-    fn fetch_waker() -> Waker {
-        unsafe { Waker::from_raw(Self::fetch_raw_waker()) }
     }
 }

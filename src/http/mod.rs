@@ -98,6 +98,12 @@ pub struct HTTPVersion {
     minor: u8,
 }
 
+impl Default for HTTPVersion {
+    fn default() -> Self {
+        HTTPVersion { major: 1, minor: 1 }
+    }
+}
+
 impl<R: Read> Parsable<R> for HTTPVersion {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         parser.skip_whitespace();

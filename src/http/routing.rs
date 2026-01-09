@@ -1,6 +1,7 @@
 use super::{
     HTTPVersion,
     request::{Method, Request, RequestBody, RequestHeaders},
+    response::{Response, ResponseHeaderType, StatusCode},
     uri::{RequestQuery, URIPath},
 };
 use crate::parsing::{StrParser, prelude::*};
@@ -40,7 +41,7 @@ impl<T: Send + Sync> InstanceRequest<T> {
 }
 
 /// Return type placeholder for route functions
-type ResponseResult = Result<(), ()>;
+pub type ResponseResult = Result<Response, Response>;
 
 /// This is a closure wrapper that allows for linking tuples of variadic
 /// arguments to a concrete function
@@ -115,6 +116,31 @@ macro_rules! impl_handler {
     }
 }
 
+impl<T, FF, Fut> Handler<(), T> for FF
+where
+    T: Send + Sync,
+    FF: Fn() -> Fut + Send + Sync + 'static,
+    (): Extract<T, InstanceRequest<T>, ()> + Send + Sync + 'static,
+    Fut: Future<Output = ResponseResult> + Send + 'static,
+{
+    type Fn = FF;
+
+    fn into_endpoint(self) -> Arc<dyn FromRequest<T>> {
+        Arc::new(Endpoint::new(self))
+    }
+}
+/// This is macro generated. See actual trait documentation instead
+impl<T, FF, Fut> FromRequest<T> for Endpoint<FF, ()>
+where
+    T: Send + Sync,
+    FF: Fn() -> Fut + Send + Sync + 'static,
+    (): Extract<T, InstanceRequest<T>, ()> + Send + Sync + 'static,
+    Fut: Future<Output = ResponseResult> + Send + 'static,
+{
+    fn apply_request(&self, _req: InstanceRequest<T>) -> Result<BoxFuture, ()> {
+        Ok(Box::pin((self.f)()))
+    }
+}
 impl_handler!(A);
 impl_handler!(A, B);
 impl_handler!(A, B, C);
@@ -275,6 +301,11 @@ impl<T, A: ToBody> Extract<T, RequestBody, RequestBody> for Body<A> {
         A::into_body(body)
     }
 }
+impl<T: Send + Sync> Extract<T, InstanceRequest<()>, Self> for () {
+    fn from_request(instance: PhantomData<T>, req: InstanceRequest<()>) -> Result<Self, ()> {
+        Ok(())
+    }
+}
 
 macros::impl_extract_permutations!();
 
@@ -319,15 +350,25 @@ impl<T: Send + Sync> Router<T> {
         self
     }
 
-    pub async fn apply_request(&self, req: Request) -> ResponseResult {
+    pub async fn apply_request(&self, req: Request) -> Response {
         let handle = match self.routes.get(&req.method_path()) {
             Some(handle) => handle.clone(),
-            None => return Err(()),
+            None => return Response::new_simple(StatusCode::InternalServerError, None),
         };
 
         let req = InstanceRequest::from_request(self.instance.clone(), req);
 
-        handle.apply_request(req)?.await
+        // TODO: default status codes
+
+        let response_result = match handle.apply_request(req) {
+            Ok(r) => r.await,
+            Err(_) => return Response::new_simple(StatusCode::InternalServerError, None),
+        };
+
+        match response_result {
+            Ok(r) => r,
+            Err(r) => r,
+        }
     }
 }
 
@@ -359,6 +400,14 @@ mod tests {
         //     dbg!(s);
         //     dbg!(b);
         //     Ok(())
+        // }
+        // FIXME: need to implement from variadics to response trait
+        //
+        // e.g.
+        // impl From<(A, B)> for Response {
+        //     fn from((a, b): (A, B)) -> Self {
+        //         //DO STUFF
+        //     }
         // }
         let router = Router::new(1_usize)
             .route(Method::Get, "some_route", method_handler)

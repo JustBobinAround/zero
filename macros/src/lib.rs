@@ -13,7 +13,6 @@ macro_rules! expect {
     ($items: expr, $s:literal) => {{
         let tmp = $items.next().is_some_and(|i| {
             let i = i.to_string();
-            eprintln!("{}", i);
             i == $s
         });
         if !tmp {
@@ -59,7 +58,7 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
     format!(
         r#"async fn async_main() -> Result<(), ()> {}
 fn main() -> Result<(), ()> {{
-    zero::async_runtime::Runtime::run_async(async_main())?;
+    zero::async_runtime::run(async_main())?;
     Ok(())
 }}"#,
         block
@@ -69,8 +68,17 @@ fn main() -> Result<(), ()> {{
 }
 
 #[proc_macro]
-pub fn html(_item: TokenStream) -> TokenStream {
-    "fn answer() -> u32 { 42 }".parse().unwrap()
+pub fn html(item: TokenStream) -> TokenStream {
+    for i in item {
+        dbg!(&i);
+        match i {
+            TokenTree::Group(g) => {
+                eprintln!("{}", g);
+            }
+            _ => {}
+        }
+    }
+    "".parse().unwrap()
 }
 
 #[proc_macro_derive(FromRequest)]

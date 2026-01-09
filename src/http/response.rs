@@ -418,6 +418,27 @@ pub struct StatusLine {
     reason_phrase: ReasonPhrase,
 }
 
+impl StatusLine {
+    pub fn new(
+        http_version: HTTPVersion,
+        status_code: StatusCode,
+        reason_phrase: ReasonPhrase,
+    ) -> Self {
+        StatusLine {
+            http_version,
+            status_code,
+            reason_phrase,
+        }
+    }
+    pub fn new_simple(status_code: StatusCode) -> Self {
+        StatusLine {
+            http_version: HTTPVersion::default(),
+            status_code,
+            reason_phrase: ReasonPhrase(String::new()),
+        }
+    }
+}
+
 impl<R: Read> Parsable<R> for StatusLine {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let http_version = HTTPVersion::parse(parser)?;
@@ -555,6 +576,24 @@ pub struct Response {
 }
 
 impl Response {
+    pub fn new(
+        status: StatusCode,
+        headers: HashMap<String, ResponseHeaderType>,
+        body: Option<String>,
+    ) -> Self {
+        Self {
+            status_line: StatusLine::new_simple(status),
+            headers,
+            body,
+        }
+    }
+    pub fn new_simple(status: StatusCode, body: Option<String>) -> Self {
+        Self {
+            status_line: StatusLine::new_simple(status),
+            headers: HashMap::new(),
+            body: body,
+        }
+    }
     pub fn test_response() -> Response {
         let mut headers = HashMap::new();
 
