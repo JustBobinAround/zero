@@ -137,7 +137,7 @@ impl std::fmt::Display for ExtractType {
 }
 
 #[allow(clippy::enum_variant_names)]
-enum ExtractTrait {
+pub enum ExtractTrait {
     ToPath,
     ToQuery,
     ToBody,
@@ -153,7 +153,7 @@ impl std::fmt::Display for ExtractTrait {
     }
 }
 
-enum GenericType {
+pub enum GenericType {
     T,
     A(ExtractTrait),
     B(ExtractTrait),

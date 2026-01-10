@@ -58,7 +58,7 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
     format!(
         r#"async fn async_main() -> Result<(), ()> {}
 fn main() -> Result<(), ()> {{
-    zero::async_runtime::run(async_main())?;
+    ::zero::async_runtime::run(async_main())?;
     Ok(())
 }}"#,
         block
@@ -67,18 +67,101 @@ fn main() -> Result<(), ()> {{
     .unwrap()
 }
 
+fn parse_attrs(attrs: TokenStream) -> String {
+    let mut items = attrs.into_iter().peekable();
+    let mut tokens = String::new();
+
+    while items.peek().is_some() {
+        let key = match items.next() {
+            Some(TokenTree::Ident(i)) => format!("{}", i),
+            Some(TokenTree::Literal(l)) => format!("{}", l),
+            Some(TokenTree::Group(g)) => format!("{}", g),
+            Some(TokenTree::Punct(p)) => panic!("Expected attribute key, found punctuation: {}", p),
+            None => break,
+        };
+        eprintln!("{}", key);
+        expect!(items, ":");
+        let val = match items.next() {
+            Some(TokenTree::Ident(i)) => format!("{}", i),
+            Some(TokenTree::Literal(l)) => format!("{}", l),
+            Some(TokenTree::Group(g)) => format!("{}", g),
+            Some(TokenTree::Punct(p)) => panic!("Expected attribute key, found punctuation: {}", p),
+            None => break,
+        };
+        eprintln!("{}", val);
+
+        tokens.push_str(&format!("attrs.insert({}.into(),{}.into());", key, val));
+
+        match items.next() {
+            Some(TokenTree::Ident(_)) => panic!("Expected punctuation or end of html attributes"),
+            Some(TokenTree::Literal(_)) => panic!("Expected punctuation or end of html attributes"),
+            Some(TokenTree::Group(_)) => panic!("Expected punctuation or end of html attributes"),
+            Some(TokenTree::Punct(_)) => {}
+            None => break,
+        }
+    }
+    eprintln!("{}", tokens);
+
+    tokens
+}
+
 #[proc_macro]
 pub fn html(item: TokenStream) -> TokenStream {
-    for i in item {
-        dbg!(&i);
-        match i {
-            TokenTree::Group(g) => {
-                eprintln!("{}", g);
+    eprintln!("{:#?}", item);
+    let mut items = item.into_iter().peekable();
+
+    let mut tokens = String::new();
+    while items.peek().is_some() {
+        let tag_name = match items.next() {
+            Some(TokenTree::Ident(i)) => i,
+            Some(TokenTree::Literal(l)) => {
+                return format!("Into::<::zero::html::Markup>::into({})", l)
+                    .parse()
+                    .unwrap();
+            }
+            Some(TokenTree::Group(g)) => {
+                return g.stream();
+            }
+            Some(t) => panic!("Expected TagType, found {:#?}", t),
+            None => return "()".parse().unwrap(),
+        };
+
+        match items.peek() {
+            Some(TokenTree::Punct(p)) => {
+                if p.to_string() == ";" {
+                    tokens.push_str(&format!(
+                        "{{let mut attrs = std::collections::HashMap::new(); ::zero::html::Tag{{ty: ::zero::html::TagType::{}, attrs, content: ::zero::html::Markup::None}}}},\n",
+                         tag_name
+                    ));
+                    items.next();
+                    continue;
+                }
             }
             _ => {}
         }
+
+        let attrs = match items.next() {
+            Some(TokenTree::Group(g)) => parse_attrs(g.stream()),
+            Some(_) => panic!("Expected Grouping for Attributes"),
+            None => String::new(),
+        };
+
+        let inner = match items.next() {
+            Some(TokenTree::Group(g)) => html(g.stream()),
+            Some(_) => panic!("Expected Grouping for inner Markup"),
+            None => "".parse().unwrap(),
+        };
+
+        tokens.push_str(&format!(
+            "{{let mut attrs = std::collections::HashMap::new(); {} ::zero::html::Tag{{ty: ::zero::html::TagType::{}, attrs, content: {}}}}},\n",
+            attrs, tag_name, inner
+        ));
     }
-    "".parse().unwrap()
+
+    let s = format!("Into::<::zero::html::Markup>::into(vec![{}])", tokens);
+    eprintln!("{}", s);
+
+    s.parse().unwrap()
 }
 
 #[proc_macro_derive(FromRequest)]

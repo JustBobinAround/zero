@@ -1,7 +1,3 @@
-use std::iter::{IntoIterator, Peekable};
-
-use proc_macro::{Delimiter, Group, TokenStream, TokenTree, token_stream::IntoIter};
-
 // async fn async_main() -> Result<(), $err_ty> $b
 // fn main() -> Result<(), ()> {
 //     $crate::async_runtime::Runtime::run_async(async_main()).map_err(|_| ())?;

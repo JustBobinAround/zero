@@ -1,5 +1,6 @@
 #![allow(clippy::from_str_radix_10)] //<< I just prefer this, idk
 #![doc = include_str!("../README.md")]
+extern crate self as zero;
 pub mod async_runtime;
 pub mod errors;
 pub mod html;

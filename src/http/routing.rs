@@ -1,10 +1,11 @@
+use crate::html::Markup;
+
 use super::{
     Body, HTTPVersion, ToBody,
     request::{Method, Request, RequestBody, RequestHeaders},
-    response::{Response as FullResponse, ResponseHeaderType, StatusCode, StatusLine},
+    response::{Response as FullResponse, ResponseHeaderType, StatusCode},
     uri::{RequestQuery, URIPath},
 };
-use crate::parsing::{StrParser, prelude::*};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -94,6 +95,11 @@ impl From<&str> for Response {
             headers: None,
             body: Some(body.to_string()),
         }
+    }
+}
+impl<'a> From<Markup<'a>> for Response {
+    fn from(m: Markup<'a>) -> Self {
+        m.to_string().into()
     }
 }
 
@@ -230,7 +236,7 @@ impl<T, FF, Fut> Handler<(), T> for FF
 where
     T: Send + Sync,
     FF: Fn() -> Fut + Send + Sync + 'static,
-    (): Extract<T, InstanceRequest<T>, ()> + Send + Sync + 'static,
+    (): Extract<T, (), ()> + Send + Sync + 'static,
     Fut: Future<Output = ResponseResult> + Send + 'static,
 {
     type Fn = FF;
@@ -244,7 +250,7 @@ impl<T, FF, Fut> FromRequest<T> for Endpoint<FF, ()>
 where
     T: Send + Sync,
     FF: Fn() -> Fut + Send + Sync + 'static,
-    (): Extract<T, InstanceRequest<T>, ()> + Send + Sync + 'static,
+    (): Extract<T, (), ()> + Send + Sync + 'static,
     Fut: Future<Output = ResponseResult> + Send + 'static,
 {
     fn apply_request(&self, _req: InstanceRequest<T>) -> Result<BoxFuture, ()> {
@@ -350,6 +356,12 @@ pub trait Extract<T, A, B>: Sized {
     fn from_request(_instance: PhantomData<T>, parts: A) -> Result<Self, ()>;
 }
 
+impl<T> Extract<T, (), ()> for () {
+    fn from_request(_instance: PhantomData<T>, _req: ()) -> Result<Self, ()> {
+        Ok(())
+    }
+}
+
 impl<T> Extract<T, Instance<T>, Instance<T>> for Instance<T> {
     fn from_request(_instance: PhantomData<T>, req: Instance<T>) -> Result<Self, ()> {
         Ok(req)
@@ -389,11 +401,6 @@ impl<T> Extract<T, RequestHeaders, RequestHeaders> for RequestHeaders {
 impl<T, A: ToBody> Extract<T, RequestBody, RequestBody> for Body<A> {
     fn from_request(_instance: PhantomData<T>, body: RequestBody) -> Result<Self, ()> {
         A::into_body(body)
-    }
-}
-impl<T: Send + Sync> Extract<T, InstanceRequest<()>, Self> for () {
-    fn from_request(instance: PhantomData<T>, req: InstanceRequest<()>) -> Result<Self, ()> {
-        Ok(())
     }
 }
 
@@ -439,6 +446,12 @@ impl<T: Send + Sync> Router<T> {
         self.routes.insert((m, s), f.into_endpoint());
         self
     }
+    pub fn include_zero_js(self) -> Self {
+        async fn include_zero() -> ResponseResult {
+            Ok(include_str!("../zero.js").into())
+        }
+        self.route(Method::Get, "/zero.js", include_zero)
+    }
 
     pub async fn apply_request(&self, req: Request) -> FullResponse {
         let handle = match self.routes.get(&req.method_path()) {
@@ -458,6 +471,7 @@ impl<T: Send + Sync> Router<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::{StrParser, prelude::*};
 
     #[test]
     fn test_router() {
@@ -466,7 +480,10 @@ mod tests {
         //     Ok(())
         // }
 
-        async fn method_handler(method: Method) -> ResponseResult {
+        async fn method_handler3() -> ResponseResult {
+            Ok("this is a test".into())
+        }
+        async fn method_handler(_method: Method) -> ResponseResult {
             Ok("this is a test".into())
         }
         async fn method_handler2(instance: Arc<usize>) -> ResponseResult {
@@ -491,7 +508,8 @@ mod tests {
         //         //DO STUFF
         //     }
         // }
-        let router = Router::new(1_usize)
+        let _router = Router::new(1_usize)
+            .route(Method::Get, "some_route3", method_handler3)
             .route(Method::Get, "some_route", method_handler)
             .route(Method::Get, "some_route2", method_handler2);
 
@@ -501,7 +519,7 @@ mod tests {
         let req = Request::parse(&mut parser).unwrap();
 
         // router.apply_request(req);
-        let i = InstanceRequest::from_request(0.into(), req);
+        let _ = InstanceRequest::from_request(0.into(), req);
 
         // assert!(false);
     }
