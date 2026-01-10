@@ -1,5 +1,6 @@
 mod extract_macro;
 mod token_parsing;
+
 use crate::extract_macro::ExtractType;
 use proc_macro::{TokenStream, TokenTree};
 
@@ -72,12 +73,47 @@ fn parse_attrs(attrs: TokenStream) -> String {
     let mut tokens = String::new();
 
     while items.peek().is_some() {
-        let key = match items.next() {
-            Some(TokenTree::Ident(i)) => format!("{}", i),
-            Some(TokenTree::Literal(l)) => format!("{}", l),
-            Some(TokenTree::Group(g)) => format!("{}", g),
-            Some(TokenTree::Punct(p)) => panic!("Expected attribute key, found punctuation: {}", p),
-            None => break,
+        let is_special_ident = items.peek().is_some_and(|i| match i {
+            &TokenTree::Ident(_) => true,
+            _ => false,
+        });
+
+        let key = if is_special_ident {
+            let mut tokens = String::from("\"");
+            while items.peek().is_some_and(|i| match i {
+                TokenTree::Ident(_) => true,
+                TokenTree::Punct(p) => p.to_string().as_str() == "-",
+                _ => false,
+            }) {
+                let token = match items.next() {
+                    Some(TokenTree::Ident(i)) => format!("{}", i),
+                    Some(TokenTree::Punct(p)) => match p.to_string().as_str() {
+                        "-" => String::from("-"),
+                        _ => unreachable!("Expected ident or \"-\" for attribute key"),
+                    },
+                    _ => {
+                        unreachable!("Expected ident or \"-\" for attribute key")
+                    }
+                };
+
+                tokens.push_str(&token);
+            }
+
+            tokens.push('"');
+
+            tokens
+        } else {
+            match items.next() {
+                Some(TokenTree::Ident(_)) => unreachable!(
+                    "Token was check for ident earlier, not fully sure how we got here..."
+                ),
+                Some(TokenTree::Literal(l)) => format!("{}", l),
+                Some(TokenTree::Group(g)) => format!("{}", g),
+                Some(TokenTree::Punct(p)) => {
+                    panic!("Expected attribute key, found punctuation: {}", p)
+                }
+                None => break,
+            }
         };
         eprintln!("{}", key);
         expect!(items, ":");

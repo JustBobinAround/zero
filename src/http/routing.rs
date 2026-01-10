@@ -1,11 +1,10 @@
-use crate::html::Markup;
-
 use super::{
     Body, HTTPVersion, ToBody,
     request::{Method, Request, RequestBody, RequestHeaders},
     response::{Response as FullResponse, ResponseHeaderType, StatusCode},
     uri::{RequestQuery, URIPath},
 };
+use crate::{html::Markup, http::ToMessageHeader};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -28,6 +27,7 @@ pub struct InstanceRequest<T: Send + Sync> {
 }
 
 impl<T: Send + Sync> InstanceRequest<T> {
+    /// Converts a `::http::request::Request` and a `Arc<T>` into a `InstanceRequest<T>`.
     pub fn from_request(instance: Arc<T>, r: Request) -> Self {
         InstanceRequest {
             instance,
@@ -41,10 +41,19 @@ impl<T: Send + Sync> InstanceRequest<T> {
     }
 }
 
+/// Wrapper struct for the actual `::http::response::Response` struct so that fields can be optional
+///
+/// The reasoning behind making a wrapper struct instead of using the actual response field
+/// is so that pieces of the response can be infered by the information left out. For instance,
+/// if we convert a `Result<T,E>` into this response but we don't provide the status code, we can
+/// assume a set of default status codes based on the result, i.e. `Ok(T) => 200` and `Err(E) => 500`.
+/// Using a generic 500 response code is a bit against best practice, but it make writing routes quite
+/// intuitive. With that said, and although quite counter intuitive, limiting to two error response types
+/// allows for easy generic error handling abstractions
 #[derive(Debug)]
 pub struct Response {
     status: Option<StatusCode>,
-    headers: Option<HashMap<String, ResponseHeaderType>>,
+    headers: Option<HashMap<String, String>>,
     body: Option<String>,
 }
 
@@ -68,8 +77,8 @@ impl From<StatusCode> for Response {
     }
 }
 
-impl From<HashMap<String, ResponseHeaderType>> for Response {
-    fn from(headers: HashMap<String, ResponseHeaderType>) -> Self {
+impl From<HashMap<String, String>> for Response {
+    fn from(headers: HashMap<String, String>) -> Self {
         Response {
             status: None,
             headers: Some(headers),
@@ -97,14 +106,24 @@ impl From<&str> for Response {
         }
     }
 }
+
 impl<'a> From<Markup<'a>> for Response {
     fn from(m: Markup<'a>) -> Self {
-        m.to_string().into()
+        let mut headers = HashMap::new();
+
+        let header = ResponseHeaderType::EntityHeader(super::EntityHeader::ContentType(
+            String::from("text/html"),
+        ));
+
+        let header_map = header.to_msg_header();
+        let (k, v) = header_map.extract_name_val();
+        headers.insert(k, v);
+        (headers, m.to_string()).into()
     }
 }
 
-impl From<(StatusCode, HashMap<String, ResponseHeaderType>)> for Response {
-    fn from((status, headers): (StatusCode, HashMap<String, ResponseHeaderType>)) -> Self {
+impl From<(StatusCode, HashMap<String, String>)> for Response {
+    fn from((status, headers): (StatusCode, HashMap<String, String>)) -> Self {
         Response {
             status: Some(status),
             headers: Some(headers),
@@ -123,14 +142,42 @@ impl From<(StatusCode, String)> for Response {
     }
 }
 
-impl From<(StatusCode, HashMap<String, ResponseHeaderType>, String)> for Response {
-    fn from(
-        (status, headers, body): (StatusCode, HashMap<String, ResponseHeaderType>, String),
-    ) -> Self {
+impl<'a> From<(StatusCode, Markup<'a>)> for Response {
+    fn from((status, body): (StatusCode, Markup)) -> Self {
+        Response {
+            status: Some(status),
+            headers: None,
+            body: Some(body.to_string()),
+        }
+    }
+}
+
+impl From<(HashMap<String, String>, String)> for Response {
+    fn from((headers, body): (HashMap<String, String>, String)) -> Self {
+        Response {
+            status: None,
+            headers: Some(headers),
+            body: Some(body),
+        }
+    }
+}
+
+impl From<(StatusCode, HashMap<String, String>, String)> for Response {
+    fn from((status, headers, body): (StatusCode, HashMap<String, String>, String)) -> Self {
         Response {
             status: Some(status),
             headers: Some(headers),
             body: Some(body),
+        }
+    }
+}
+
+impl<'a> From<(StatusCode, HashMap<String, String>, Markup<'a>)> for Response {
+    fn from((status, headers, body): (StatusCode, HashMap<String, String>, Markup<'a>)) -> Self {
+        Response {
+            status: Some(status),
+            headers: Some(headers),
+            body: Some(body.to_string()),
         }
     }
 }

@@ -528,7 +528,6 @@ impl ResponseHeaderMap {
 impl<R: Read> Parsable<R> for ResponseHeaderMap {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let header = MessageHeader::parse(parser);
-        dbg!(&header);
         let header = header?;
         if GeneralHeader::can_convert(&header) {
             let (name, header) = header.into_header()?;
@@ -571,16 +570,12 @@ impl<R: Read> Parsable<R> for ResponseHeaderMap {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Response {
     status_line: StatusLine,
-    headers: HashMap<String, ResponseHeaderType>,
+    headers: HashMap<String, String>,
     body: Option<String>,
 }
 
 impl Response {
-    pub fn new(
-        status: StatusCode,
-        headers: HashMap<String, ResponseHeaderType>,
-        body: Option<String>,
-    ) -> Self {
+    pub fn new(status: StatusCode, headers: HashMap<String, String>, body: Option<String>) -> Self {
         Self {
             status_line: StatusLine::new_simple(status),
             headers,
@@ -608,15 +603,15 @@ impl Response {
 </html>"#,
         );
         let msg_len = msg.len();
-
-        headers.insert(
-            String::from("content-length"),
-            ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(msg_len)),
-        );
-        headers.insert(
-            String::from("content-type"),
-            ResponseHeaderType::EntityHeader(EntityHeader::ContentType(String::from("text/html"))),
-        );
+        let (k, v) = ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(msg_len))
+            .to_msg_header()
+            .extract_name_val();
+        headers.insert(k, v);
+        let (k, v) =
+            ResponseHeaderType::EntityHeader(EntityHeader::ContentType(String::from("text/html")))
+                .to_msg_header()
+                .extract_name_val();
+        headers.insert(k, v);
         Response {
             status_line: StatusLine {
                 http_version: HTTPVersion { major: 1, minor: 1 },
@@ -638,11 +633,11 @@ impl<R: Read> Parsable<R> for Response {
         let mut body_len = None;
 
         while let Ok(header) = ResponseHeaderMap::parse(parser) {
-            let (name, ty) = header.extract_name_type();
-            if let ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(len)) = ty {
+            if let ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(len)) = header.ty {
                 body_len = Some(len)
             }
-            headers.insert(name, ty);
+            let (k, v) = header.ty.to_msg_header().extract_name_val();
+            headers.insert(k, v);
         }
 
         let body = match body_len {
@@ -670,9 +665,8 @@ impl<R: Read> Parsable<R> for Response {
 impl<W: std::io::Write> StreamWritable<W> for Response {
     fn write_to_stream(self, stream: &mut W) -> StreamResult {
         self.status_line.write_to_stream(stream)?;
-        for (_name, ty) in self.headers.into_iter() {
-            ty.to_msg_header().write_to_stream(stream)?;
-            write!(stream, "\r\n")?;
+        for (name, val) in self.headers.into_iter() {
+            write!(stream, "{}:{}\r\n", name, val)?;
         }
         if let Some(body) = self.body {
             write!(stream, "\r\n{}", body)?;
@@ -694,22 +688,19 @@ mod tests {
             "HTTP/1.1 200\r\ndate: Tue, 30 Dec 2025 12:06:15 GMT\r\ncontent-type: text/plain; charset=UTF-8\r\ncontent-length: 0\r\n",
         );
         let mut headers = HashMap::new();
-        headers.insert(
-            String::from("date"),
-            ResponseHeaderType::GeneralHeader(GeneralHeader::Date(
-                "Tue, 30 Dec 2025 12:06:15 GMT".to_string(),
-            )),
-        );
-        headers.insert(
-            String::from("content-type"),
-            ResponseHeaderType::EntityHeader(EntityHeader::ContentType(
-                "text/plain; charset=UTF-8".to_string(),
-            )),
-        );
-        headers.insert(
-            String::from("content-length"),
-            ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(0)),
-        );
+        let header = ResponseHeaderType::GeneralHeader(GeneralHeader::Date(
+            "Tue, 30 Dec 2025 12:06:15 GMT".to_string(),
+        ));
+        let (k, v) = header.to_msg_header().extract_name_val();
+        headers.insert(k, v);
+        let header = ResponseHeaderType::EntityHeader(EntityHeader::ContentType(
+            "text/plain; charset=UTF-8".to_string(),
+        ));
+        let (k, v) = header.to_msg_header().extract_name_val();
+        headers.insert(k, v);
+        let header = ResponseHeaderType::EntityHeader(EntityHeader::ContentLength(0));
+        let (k, v) = header.to_msg_header().extract_name_val();
+        headers.insert(k, v);
         assert_eq!(
             Response::parse(&mut parser),
             Ok(Response {

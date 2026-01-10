@@ -15,7 +15,7 @@ impl<'a> std::fmt::Display for Tag<'a> {
         let tag = &self.ty.as_str();
         write!(f, "<{} ", tag)?;
         for (k, v) in self.attrs.iter() {
-            write!(f, "{}=\"{}\"", k, v)?;
+            write!(f, "{}=\"{}\" ", k, v)?;
         }
         write!(f, ">")?;
         self.content.fmt(f)?;

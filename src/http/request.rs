@@ -197,7 +197,6 @@ impl RequestHeaderMap {
 impl<R: Read> Parsable<R> for RequestHeaderMap {
     fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
         let header = MessageHeader::parse(parser);
-        dbg!(&header);
         let header = header?;
         if GeneralHeader::can_convert(&header) {
             let (name, header) = header.into_header()?;
