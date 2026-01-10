@@ -1,5 +1,6 @@
 // use std::net::TcpListener;
 // use zero::http::response::Response;
+use zero::html;
 use zero::http::{
     request::Method,
     routing::{ResponseResult, Router},
@@ -14,11 +15,19 @@ use zero::http::{
 // });
 
 pub async fn index() -> ResponseResult {
-    Err("this is a test".into())
+    Err(html! {
+        P;
+        P(){
+            "test "
+        }
+    }
+    .into())
 }
 #[zero::main]
 async fn main() -> Result<(), ()> {
-    let router = Router::new(()).route(Method::Get, "/", index);
+    let router = Router::new(())
+        .route(Method::Get, "/", index)
+        .include_zero_js();
 
     let mut server = HttpServer::from_router(router);
 
