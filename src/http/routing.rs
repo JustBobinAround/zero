@@ -4,7 +4,7 @@ use super::{
     response::{Response as FullResponse, ResponseHeaderType, StatusCode},
     uri::{RequestQuery, URIPath},
 };
-use crate::{html::Markup, http::ToMessageHeader};
+use crate::{html::Markup, http::ToMessageHeader, serializer::FromMap};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -319,7 +319,7 @@ impl_handler!(A, B, C, D, E, F, G);
 /// the dev.
 pub type Instance<T> = Arc<T>;
 
-pub struct Path<T>(T);
+pub struct Path<T>(pub T);
 
 pub trait ToPath: Sized {
     fn into_path(path: URIPath) -> Result<Path<Self>, ()>;
@@ -343,23 +343,27 @@ impl ToPath for HashSet<String> {
     }
 }
 
-pub struct Query<T: ToQuery>(T);
+pub struct Query<T: ToQuery>(pub T);
 
 pub trait ToQuery: Sized {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()>;
 }
 
-impl ToQuery for String {
+impl<T: FromMap> ToQuery for T {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
-        Ok(Query(query.to_string()))
+        let s = query.parameters;
+        match T::from_map(s) {
+            Ok(t) => Ok(Query(t)),
+            Err(_) => Err(()),
+        }
     }
 }
 
-impl ToQuery for HashMap<String, String> {
-    fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
-        Ok(Query(query.parameters))
-    }
-}
+// impl ToQuery for HashMap<String, String> {
+//     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
+//         Ok(Query(query.parameters))
+//     }
+// }
 
 /// This trait helps rust figure out how to extract different combintations of tuples.
 ///
@@ -509,8 +513,14 @@ impl<T: Send + Sync> Router<T> {
         let req = InstanceRequest::from_request(self.instance.clone(), req);
 
         match handle.apply_request(req) {
-            Ok(r) => r.await.into(),
-            Err(_) => FullResponse::new_simple(StatusCode::InternalServerError, None),
+            Ok(r) => {
+                eprintln!("hit");
+                r.await.into()
+            }
+            Err(_) => {
+                eprintln!("hit2");
+                FullResponse::new_simple(StatusCode::InternalServerError, None)
+            }
         }
     }
 }

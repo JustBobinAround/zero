@@ -301,6 +301,7 @@ impl<R: Read> Parsable<R> for Request {
         parser.skip_whitespace();
         let path = URIPath::parse(parser)?;
         let query = if parser.matches(|c| c == b'?') {
+            parser.consume();
             RequestQuery::parse(parser)?
         } else {
             RequestQuery::default()

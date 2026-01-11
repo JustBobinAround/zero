@@ -115,18 +115,16 @@ fn parse_attrs(attrs: TokenStream) -> String {
                 None => break,
             }
         };
-        eprintln!("{}", key);
         expect!(items, ":");
         let val = match items.next() {
             Some(TokenTree::Ident(i)) => format!("{}", i),
             Some(TokenTree::Literal(l)) => format!("{}", l),
             Some(TokenTree::Group(g)) => format!("{}", g),
-            Some(TokenTree::Punct(p)) => panic!("Expected attribute key, found punctuation: {}", p),
+            Some(TokenTree::Punct(p)) => panic!("Expected attribute val, found punctuation: {}", p),
             None => break,
         };
-        eprintln!("{}", val);
 
-        tokens.push_str(&format!("attrs.insert({}.into(),{}.into());", key, val));
+        tokens.push_str(&format!(".set_attr({}.into(),{}.into())", key, val));
 
         match items.next() {
             Some(TokenTree::Ident(_)) => panic!("Expected punctuation or end of html attributes"),
@@ -166,8 +164,8 @@ pub fn html(item: TokenStream) -> TokenStream {
             Some(TokenTree::Punct(p)) => {
                 if p.to_string() == ";" {
                     tokens.push_str(&format!(
-                        "{{let mut attrs = std::collections::HashMap::new(); ::zero::html::Tag{{ty: ::zero::html::TagType::{}, attrs, content: ::zero::html::Markup::None}}}},\n",
-                         tag_name
+                        "{{::zero::html::Tag::new(::zero::html::TagType::{})}},\n",
+                        tag_name
                     ));
                     items.next();
                     continue;
@@ -189,8 +187,8 @@ pub fn html(item: TokenStream) -> TokenStream {
         };
 
         tokens.push_str(&format!(
-            "{{let mut attrs = std::collections::HashMap::new(); {} ::zero::html::Tag{{ty: ::zero::html::TagType::{}, attrs, content: {}}}}},\n",
-            attrs, tag_name, inner
+            "{{::zero::html::Tag::new(::zero::html::TagType::{}){}.set_content({}) }},\n",
+            tag_name, attrs, inner
         ));
     }
 

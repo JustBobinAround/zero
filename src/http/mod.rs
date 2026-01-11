@@ -11,7 +11,7 @@ use crate::stream_writer::prelude::*;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
-pub struct Body<T: ToBody>(T);
+pub struct Body<T: ToBody>(pub T);
 
 impl std::fmt::Display for Body<String> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

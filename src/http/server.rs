@@ -1,3 +1,4 @@
+use super::response::{Response, StatusCode};
 use super::routing::Router;
 use crate::stream_writer::StreamWritable;
 use crate::{errors::ZeroErr, http::request::Request, parsing::StreamParser};
@@ -31,7 +32,10 @@ impl<T: Send + Sync> HttpServer<T> {
                             let response = router.apply_request(request).await;
                             let _ = response.write_to_stream(&mut stream);
                         }
-                        Err(_) => {}
+                        Err(_) => {
+                            let response = Response::new_simple(StatusCode::BadRequest, None);
+                            let _ = response.write_to_stream(&mut stream);
+                        }
                     }
                 }
                 Err(e) => eprintln!("connection failed: {}", e),

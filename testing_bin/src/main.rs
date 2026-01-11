@@ -1,9 +1,10 @@
 // use std::net::TcpListener;
 // use zero::http::response::Response;
+use std::collections::HashMap;
 use zero::html;
 use zero::http::{
     request::Method,
-    routing::{ResponseResult, Router},
+    routing::{FromMap, Query, ResponseResult, Router},
     server::HttpServer,
 };
 
@@ -13,28 +14,59 @@ use zero::http::{
 
 //     Ok(())
 // });
-
-pub async fn content() -> ResponseResult {
-    Ok("this is a test".into())
+pub struct Usize {
+    inner: usize,
 }
-pub async fn index() -> ResponseResult {
+
+impl FromMap for Usize {
+    fn from_map(map: HashMap<String, String>) -> Result<Self, ()> {
+        eprintln!("hit inner parse");
+        let i = map.get("inner").map(|i| Ok(i)).unwrap_or(Err(()))?;
+
+        let inner = usize::from_str_radix(i, 10).map_err(|_| ())?;
+
+        Ok(Self { inner })
+    }
+}
+
+pub async fn content(Query(i): Query<Usize>) -> ResponseResult {
+    let i = (i.inner + 1).to_string();
+
     Ok(html! {
-    BUTTON(
-        fx-action:"/content",
+        BUTTON(
+            id:"output",
+            fx-action:(format!("/content?inner={}",i)),
             fx-method:"get",
             fx-trigger:"click",
             fx-target:"#output",
-            fx-swap:"innerHTML",
-    ){
-        "Get Content"
-    }
-    OUTPUT(
-        id:"output"
-    ){}
-    SCRIPT(src:"/zero.js"){}
+            fx-swap:"outerHTML",
+        ){
+            (i.into())
         }
+    }
     .into())
 }
+
+pub async fn index() -> ResponseResult {
+    let i = 0.to_string();
+    Ok(html! {
+        BUTTON(
+            id:"output",
+            fx-action:"/content?inner=0",
+            fx-method:"get",
+            fx-trigger:"click",
+            fx-target:"#output",
+            fx-swap:"outerHTML",
+        ){
+            (i.into())
+        }
+        SCRIPT(
+            src:"/zero.js"
+        ){}
+    }
+    .into())
+}
+
 #[zero::main]
 async fn main() -> Result<(), ()> {
     let router = Router::new(())

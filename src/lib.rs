@@ -6,6 +6,7 @@ pub mod errors;
 pub mod html;
 pub mod http;
 pub mod parsing;
+pub mod serializer;
 pub mod stream_writer;
 pub mod variadics;
 /// proc macro to wrap main around async executor

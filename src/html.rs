@@ -2,19 +2,50 @@ use macros::html;
 use std::collections::HashMap;
 
 pub type HTML<'a> = Vec<Tag<'a>>;
+/// Hold html tag, attributes, inner content, etc
 #[derive(Debug)]
 pub struct Tag<'a> {
-    pub ty: TagType,
-    pub attrs: HashMap<Text<'a>, Text<'a>>,
-    pub content: Markup<'a>,
+    ty: TagType,
+    attrs: HashMap<Text<'a>, Text<'a>>,
+    content: Markup<'a>,
 }
 
-//TODO: sanatize strings
+impl<'a> Tag<'a> {
+    pub fn new(ty: TagType) -> Self {
+        Tag {
+            ty,
+            attrs: HashMap::new(),
+            content: Markup::None,
+        }
+    }
+
+    /// Sets current tag attributes
+    ///
+    /// This is mainly intended to be used by the html macro.
+    ///
+    /// This method assumes a valid key. If invalid, the attribute
+    /// is not added. The value of the attribute is auto-escaped for html.
+    /// Escaping assumes valid utf8.
+    pub fn set_attr(mut self, key: Text<'a>, val: Text<'a>) -> Self {
+        if let Ok(key) = key.to_valid_attr_key() {
+            self.attrs.insert(key, val.to_escaped());
+        }
+        self
+    }
+
+    pub fn set_content(mut self, content: Markup<'a>) -> Self {
+        self.content = content;
+        self
+    }
+}
+
+/// Prints tag as html
 impl<'a> std::fmt::Display for Tag<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let tag = &self.ty.as_str();
         write!(f, "<{} ", tag)?;
         for (k, v) in self.attrs.iter() {
+            eprint!("{}=\"{}\" ", k, v);
             write!(f, "{}=\"{}\" ", k, v)?;
         }
         write!(f, ">")?;
@@ -23,12 +54,16 @@ impl<'a> std::fmt::Display for Tag<'a> {
     }
 }
 
+/// Internal markup struct for `html!` macro
+///
+/// Note: html is just an alias for Vec<Tag>
 #[derive(Debug)]
 pub enum Markup<'a> {
     Text(Text<'a>),
     Html(HTML<'a>),
     None,
 }
+
 impl<'a> std::fmt::Display for Markup<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -43,16 +78,25 @@ impl<'a> std::fmt::Display for Markup<'a> {
         }
     }
 }
+
+impl<'a> From<String> for Markup<'a> {
+    fn from(value: String) -> Self {
+        Markup::Text(Into::<Text<'a>>::into(value).to_escaped())
+    }
+}
+
 impl<'a> From<&'a str> for Markup<'a> {
     fn from(value: &'a str) -> Self {
-        Markup::Text(value.into())
+        Markup::Text(Into::<Text<'a>>::into(value).to_escaped())
     }
 }
+
 impl<'a> From<Text<'a>> for Markup<'a> {
     fn from(value: Text<'a>) -> Self {
-        Markup::Text(value)
+        Markup::Text(Into::<Text<'a>>::into(value).to_escaped())
     }
 }
+
 impl<'a> From<HTML<'a>> for Markup<'a> {
     fn from(value: HTML<'a>) -> Self {
         Markup::Html(value)
@@ -67,8 +111,15 @@ impl From<()> for Markup<'_> {
 use std::borrow::Cow;
 use std::hash::Hasher;
 
+/// Text holder for html/tags/markup
+///
+/// This should eventually work mostly like a cowstr
+/// with a few extra optomization. Such guarantees are
+/// not in place current
 #[derive(Debug)]
 pub struct Text<'a>(Cow<'a, str>);
+
+/// Prints inner text. MUST BE PRE-ESCAPED FOR HTML. See `to_escaped()`
 impl<'a> std::fmt::Display for Text<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -82,6 +133,48 @@ impl<'a> Text<'a> {
 
     pub fn owned(s: String) -> Self {
         Text(Cow::Owned(s))
+    }
+
+    pub fn to_valid_attr_key(self) -> Result<Self, ()> {
+        let mut is_valid = true;
+        let mut has_upper = false;
+        for (i, c) in self.0.chars().enumerate() {
+            let is_valid_char = (i == 0 && c.is_ascii_alphabetic())
+                || (i > 0 && (c.is_ascii_alphanumeric() || c == '-'));
+
+            if !is_valid_char {
+                is_valid = false;
+                break;
+            }
+
+            if c.is_ascii_uppercase() {
+                has_upper = true;
+            }
+        }
+
+        if is_valid {
+            if has_upper {
+                Ok(self.0.to_ascii_lowercase().into())
+            } else {
+                Ok(self)
+            }
+        } else {
+            Err(())
+        }
+    }
+
+    // TODO: figure out how to not make this so badly lol
+    //
+    //
+    // src https://html.spec.whatwg.org/multipage/named-characters.html#named-character-references
+    pub fn to_escaped(self) -> Self {
+        self.0
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+            .into()
     }
 }
 
@@ -110,6 +203,7 @@ impl<'a> std::hash::Hash for Text<'a> {
     }
 }
 
+/// Holds all valid html tag names
 #[derive(Debug)]
 pub enum TagType {
     A,
