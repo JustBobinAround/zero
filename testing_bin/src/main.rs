@@ -1,12 +1,13 @@
 // use std::net::TcpListener;
 // use zero::http::response::Response;
 use std::collections::HashMap;
-use zero::html;
 use zero::http::{
     request::Method,
-    routing::{FromMap, Query, ResponseResult, Router},
+    routing::{Query, ResponseResult, Router},
     server::HttpServer,
 };
+use zero::serializer::FromMap;
+use zero::{Deserialize, html};
 
 // async_main!(() -> Result<(), ZeroErr> {
 //     // let listener = TcpListener::bind("127.0.0.1:8000").map_err(|e| ZeroErr::FailedToOpen)?;
@@ -16,6 +17,11 @@ use zero::http::{
 // });
 pub struct Usize {
     inner: usize,
+}
+
+#[derive(Deserialize)]
+pub struct TestStruct<T> {
+    some: Vec<T>,
 }
 
 impl FromMap for Usize {
@@ -68,7 +74,7 @@ pub async fn index() -> ResponseResult {
 }
 
 #[zero::main]
-async fn main() -> Result<(), ()> {
+async fn main() -> Result<(), i32> {
     let router = Router::new(())
         .route(Method::Get, "/", index)
         .route(Method::Get, "/content", content)
@@ -77,5 +83,5 @@ async fn main() -> Result<(), ()> {
     let mut server = HttpServer::from_router(router);
 
     let serve = server.serve("127.0.0.1:8000").await;
-    Ok(())
+    Err(1)
 }

@@ -1,8 +1,10 @@
 mod extract_macro;
-mod token_parsing;
+mod token_parser;
 
-use crate::extract_macro::ExtractType;
-use proc_macro::{TokenStream, TokenTree};
+use std::iter::Peekable;
+
+use crate::{extract_macro::ExtractType, token_parser::TokenParser};
+use proc_macro::{TokenStream, TokenTree, token_stream::IntoIter};
 
 #[proc_macro]
 pub fn impl_extract_permutations(_item: TokenStream) -> TokenStream {
@@ -13,6 +15,7 @@ pub fn impl_extract_permutations(_item: TokenStream) -> TokenStream {
 macro_rules! expect {
     ($items: expr, $s:literal) => {{
         let tmp = $items.next().is_some_and(|i| {
+            eprintln!("{:#?}", i);
             let i = i.to_string();
             i == $s
         });
@@ -24,129 +27,91 @@ macro_rules! expect {
 
 #[proc_macro_attribute]
 pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut items = item.into_iter();
+    let mut parser = TokenParser::new(item);
 
-    expect!(items, "async");
-    expect!(items, "fn");
-    expect!(items, "main");
-    expect!(items, "()");
-    expect!(items, "-");
-    expect!(items, ">");
-    expect!(items, "Result");
-    expect!(items, "<");
-    expect!(items, "()");
-    expect!(items, ",");
-    expect!(items, "()");
-    expect!(items, ">");
-    let block = items.next().expect("Expected function block");
-    // for mut i in item {
-    //     eprintln!("{:#?}", i);
-    //     let s = match i {
-    //         TokenTree::Group(g) => g.to_string(),
-    //         TokenTree::Ident(i) => i.to_string(),
-    //         TokenTree::Punct(p) => p.to_string(),
-    //         TokenTree::Literal(l) => l.to_string(),
-    //     };
-    //     eprintln!("{}", s);
-    // }
-    // async fn async_main() -> Result<(), $err_ty> $b
-    // fn main() -> Result<(), ()> {
-    //     $crate::async_runtime::Runtime::run_async(async_main()).map_err(|_| ())?;
+    parser
+        .consume_if(|p| p.is_ident("async"))
+        .expect("async token");
+    parser.consume_if(|p| p.is_ident("fn")).expect("fn token");
+    parser
+        .consume_if(|p| p.is_ident("main"))
+        .expect("main token");
+    parser
+        .consume_if(|p| p.is_any_group())
+        .expect("empty fn parameters");
+    parser.consume_if(|p| p.is_punct("-")).expect("-> token");
+    parser.consume_if(|p| p.is_punct(">")).expect("-> token");
+    let return_type: String = parser
+        .consume_type()
+        .expect("a return type")
+        .into_iter()
+        .map(|t| t.to_string())
+        .collect();
+    let function_block = parser
+        .consume_if(|p| p.is_any_group())
+        .expect("main function block");
 
-    //     Ok(())
-    // }
-
-    format!(
-        r#"async fn async_main() -> Result<(), ()> {}
-fn main() -> Result<(), ()> {{
-    ::zero::async_runtime::run(async_main())?;
-    Ok(())
+    let s = format!(
+        r#"async fn async_main() -> {} {}
+fn main() -> {} {{
+    ::zero::async_runtime::run(async_main())
 }}"#,
-        block
-    )
-    .parse()
-    .unwrap()
+        &return_type, function_block, &return_type,
+    );
+    eprintln!("{}", s);
+    s.parse().expect("Failed to parse proc macro str")
 }
+fn parse_attrs(attrs: TokenStream) -> Result<String, ()> {
+    let mut parser = TokenParser::new(attrs);
 
-fn parse_attrs(attrs: TokenStream) -> String {
-    let mut items = attrs.into_iter().peekable();
     let mut tokens = String::new();
 
-    while items.peek().is_some() {
-        let is_special_ident = items.peek().is_some_and(|i| match i {
-            &TokenTree::Ident(_) => true,
-            _ => false,
-        });
-
-        let key = if is_special_ident {
-            let mut tokens = String::from("\"");
-            while items.peek().is_some_and(|i| match i {
-                TokenTree::Ident(_) => true,
-                TokenTree::Punct(p) => p.to_string().as_str() == "-",
-                _ => false,
-            }) {
-                let token = match items.next() {
-                    Some(TokenTree::Ident(i)) => format!("{}", i),
-                    Some(TokenTree::Punct(p)) => match p.to_string().as_str() {
-                        "-" => String::from("-"),
-                        _ => unreachable!("Expected ident or \"-\" for attribute key"),
-                    },
-                    _ => {
-                        unreachable!("Expected ident or \"-\" for attribute key")
-                    }
-                };
-
-                tokens.push_str(&token);
-            }
-
-            tokens.push('"');
-
-            tokens
+    while parser.has_tokens_left() {
+        let key = if parser.is_any_ident() {
+            let name: String = parser
+                .consume_while(|p| p.is_any_ident() || p.is_punct("-"))
+                .into_iter()
+                .map(|t| t.to_string())
+                .collect();
+            format!("\"{}\"", name)
         } else {
-            match items.next() {
-                Some(TokenTree::Ident(_)) => unreachable!(
-                    "Token was check for ident earlier, not fully sure how we got here..."
-                ),
-                Some(TokenTree::Literal(l)) => format!("{}", l),
-                Some(TokenTree::Group(g)) => format!("{}", g),
-                Some(TokenTree::Punct(p)) => {
-                    panic!("Expected attribute key, found punctuation: {}", p)
-                }
-                None => break,
+            if parser.is_any_punct() || parser.is_any_ident() {
+                panic!("Expected attribute key, found punctuation or ident");
+            } else if let Some(t) = parser.consume() {
+                t.to_string()
+            } else {
+                break;
             }
         };
-        expect!(items, ":");
-        let val = match items.next() {
-            Some(TokenTree::Ident(i)) => format!("{}", i),
-            Some(TokenTree::Literal(l)) => format!("{}", l),
-            Some(TokenTree::Group(g)) => format!("{}", g),
-            Some(TokenTree::Punct(p)) => panic!("Expected attribute val, found punctuation: {}", p),
+        parser.consume_if(|p| p.is_punct(":"))?;
+        if parser.is_any_punct() {
+            panic!("Expected attribute val, found punctuation");
+        }
+        let val = match parser.consume_as_str() {
+            Some(s) => s,
             None => break,
         };
-
         tokens.push_str(&format!(".set_attr({}.into(),{}.into())", key, val));
 
-        match items.next() {
-            Some(TokenTree::Ident(_)) => panic!("Expected punctuation or end of html attributes"),
-            Some(TokenTree::Literal(_)) => panic!("Expected punctuation or end of html attributes"),
-            Some(TokenTree::Group(_)) => panic!("Expected punctuation or end of html attributes"),
-            Some(TokenTree::Punct(_)) => {}
-            None => break,
+        if !parser.has_tokens_left() {
+            break;
+        } else if parser.is_any_punct() {
+            parser.consume();
+        } else {
+            panic!("Expected punctuation or end of html attributes")
         }
     }
-    eprintln!("{}", tokens);
 
-    tokens
+    Ok(tokens)
 }
 
 #[proc_macro]
 pub fn html(item: TokenStream) -> TokenStream {
-    eprintln!("{:#?}", item);
-    let mut items = item.into_iter().peekable();
+    let mut parser = TokenParser::new(item);
 
     let mut tokens = String::new();
-    while items.peek().is_some() {
-        let tag_name = match items.next() {
+    while parser.has_tokens_left() {
+        let tag_name = match parser.consume() {
             Some(TokenTree::Ident(i)) => i,
             Some(TokenTree::Literal(l)) => {
                 return format!("Into::<::zero::html::Markup>::into({})", l)
@@ -160,30 +125,33 @@ pub fn html(item: TokenStream) -> TokenStream {
             None => return "()".parse().unwrap(),
         };
 
-        match items.peek() {
-            Some(TokenTree::Punct(p)) => {
-                if p.to_string() == ";" {
-                    tokens.push_str(&format!(
-                        "{{::zero::html::Tag::new(::zero::html::TagType::{})}},\n",
-                        tag_name
-                    ));
-                    items.next();
-                    continue;
-                }
-            }
-            _ => {}
+        if parser.is_punct(";") {
+            tokens.push_str(&format!(
+                "{{::zero::html::Tag::new(::zero::html::TagType::{})}},\n",
+                tag_name
+            ));
+            parser.consume();
+            continue;
         }
 
-        let attrs = match items.next() {
-            Some(TokenTree::Group(g)) => parse_attrs(g.stream()),
-            Some(_) => panic!("Expected Grouping for Attributes"),
-            None => String::new(),
+        let tt = parser.consume();
+
+        let attrs = if let Some(TokenTree::Group(g)) = tt {
+            parse_attrs(g.stream()).expect("expected valid attribute")
+        } else if tt.is_some() {
+            panic!("Expected Grouping for Attributes")
+        } else {
+            String::new()
         };
 
-        let inner = match items.next() {
-            Some(TokenTree::Group(g)) => html(g.stream()),
-            Some(_) => panic!("Expected Grouping for inner Markup"),
-            None => "".parse().unwrap(),
+        let tt = parser.consume();
+
+        let inner = if let Some(TokenTree::Group(g)) = tt {
+            html(g.stream())
+        } else if tt.is_some() {
+            panic!("Expected Grouping for inner markup")
+        } else {
+            "".parse().unwrap()
         };
 
         tokens.push_str(&format!(
@@ -198,19 +166,45 @@ pub fn html(item: TokenStream) -> TokenStream {
     s.parse().unwrap()
 }
 
-#[proc_macro_derive(FromRequest)]
-pub fn derive_from_request(_item: TokenStream) -> TokenStream {
-    "fn answer() -> u32 { 42 }".parse().unwrap()
-}
+#[proc_macro_derive(Deserialize)]
+pub fn derive_deserialize(items: TokenStream) -> TokenStream {
+    let mut items = items.into_iter().peekable();
 
-/*
-pub fn some_route<>
-*/
+    let has_pub = items.peek().is_some_and(|i| match i {
+        TokenTree::Ident(i) => i.to_string() == "pub",
+        _ => false,
+    });
 
-#[cfg(test)]
-mod tests {
-    // use super::*;
+    let visiblity = if has_pub {
+        items.next();
+        "pub "
+    } else {
+        ""
+    };
 
-    #[test]
-    fn it_works() {}
+    let is_struct = items.peek().is_some_and(|i| match i {
+        TokenTree::Ident(i) => i.to_string() == "struct",
+        _ => false,
+    });
+
+    let is_enum = items.peek().is_some_and(|i| match i {
+        TokenTree::Ident(i) => i.to_string() == "enum",
+        _ => false,
+    });
+
+    let item_ty = if is_struct {
+        items.next();
+        "struct "
+    } else if is_enum {
+        unimplemented!("Haven't created a serialization standard for enums yet")
+        // items.next();
+        // "enum "
+    } else {
+        panic!("Expected an enum or struct")
+    };
+
+    for item in items {
+        eprintln!("{:#?}", item);
+    }
+    "".parse().unwrap()
 }
