@@ -1,7 +1,7 @@
 mod extract_macro;
 mod token_parser;
 
-use std::iter::Peekable;
+use std::{collections::HashMap, iter::Peekable};
 
 use crate::{extract_macro::ExtractType, token_parser::TokenParser};
 use proc_macro::{TokenStream, TokenTree, token_stream::IntoIter};
@@ -10,19 +10,6 @@ use proc_macro::{TokenStream, TokenTree, token_stream::IntoIter};
 pub fn impl_extract_permutations(_item: TokenStream) -> TokenStream {
     let choices = ExtractType::all_choices();
     ExtractType::make_combinations(choices).parse().unwrap()
-}
-
-macro_rules! expect {
-    ($items: expr, $s:literal) => {{
-        let tmp = $items.next().is_some_and(|i| {
-            eprintln!("{:#?}", i);
-            let i = i.to_string();
-            i == $s
-        });
-        if !tmp {
-            panic!("Failed to find {}", $s);
-        }
-    }};
 }
 
 #[proc_macro_attribute]
@@ -61,6 +48,7 @@ fn main() -> {} {{
     eprintln!("{}", s);
     s.parse().expect("Failed to parse proc macro str")
 }
+
 fn parse_attrs(attrs: TokenStream) -> Result<String, ()> {
     let mut parser = TokenParser::new(attrs);
 
@@ -161,50 +149,89 @@ pub fn html(item: TokenStream) -> TokenStream {
     }
 
     let s = format!("Into::<::zero::html::Markup>::into(vec![{}])", tokens);
-    eprintln!("{}", s);
 
     s.parse().unwrap()
+}
+fn parse_enum(parser: TokenParser, tokens: Vec<TokenTree>) -> TokenStream {
+    unimplemented!("Enum serialization is not supported at this time")
+}
+
+fn parse_struct(mut parser: TokenParser, mut tokens: Vec<TokenTree>) -> TokenStream {
+    let struct_name = parser
+        .consume_if(|p| p.is_any_ident())
+        .expect("structure ident");
+    tokens.push(struct_name);
+    if parser.is_punct("<") {
+        tokens = parser
+            .consume_generics_impl(tokens)
+            .expect("Expected valid generics");
+    }
+
+    let group = match parser.consume() {
+        Some(TokenTree::Group(g)) => g,
+        _ => panic!("expected inner structure"),
+    };
+
+    let mut inner_parser = TokenParser::new(group.stream());
+
+    let mut struct_map = HashMap::new();
+
+    while inner_parser.has_tokens_left() {
+        let ident = inner_parser
+            .consume_if(|p| p.is_any_ident())
+            .expect("a field name")
+            .to_string();
+
+        let (is_pub, ident) = if ident == "pub" {
+            let ident = inner_parser
+                .consume_if(|p| p.is_any_ident())
+                .expect("a field name")
+                .to_string();
+
+            (true, ident)
+        } else {
+            (false, ident)
+        };
+
+        inner_parser
+            .consume_if(|p| p.is_punct(":"))
+            .expect("a ':' after field name");
+
+        let ty = inner_parser.consume_type().expect("a field type");
+
+        struct_map.insert(ident, (is_pub, ty));
+
+        let _ = inner_parser.consume_if(|p| p.is_punct(","));
+    }
+
+    // tokens.push(group);
+    dbg!(&struct_map);
+
+    "".parse().unwrap()
 }
 
 #[proc_macro_derive(Deserialize)]
 pub fn derive_deserialize(items: TokenStream) -> TokenStream {
-    let mut items = items.into_iter().peekable();
+    let mut parser = TokenParser::new(items);
+    let mut tokens = Vec::new();
 
-    let has_pub = items.peek().is_some_and(|i| match i {
-        TokenTree::Ident(i) => i.to_string() == "pub",
-        _ => false,
-    });
-
-    let visiblity = if has_pub {
-        items.next();
-        "pub "
-    } else {
-        ""
-    };
-
-    let is_struct = items.peek().is_some_and(|i| match i {
-        TokenTree::Ident(i) => i.to_string() == "struct",
-        _ => false,
-    });
-
-    let is_enum = items.peek().is_some_and(|i| match i {
-        TokenTree::Ident(i) => i.to_string() == "enum",
-        _ => false,
-    });
-
-    let item_ty = if is_struct {
-        items.next();
-        "struct "
-    } else if is_enum {
-        unimplemented!("Haven't created a serialization standard for enums yet")
-        // items.next();
-        // "enum "
-    } else {
-        panic!("Expected an enum or struct")
-    };
-
-    for item in items {
-        eprintln!("{:#?}", item);
+    match parser.consume_if(|p| p.is_ident("pub")) {
+        Ok(t) => tokens.push(t),
+        Err(_) => {}
     }
-    "".parse().unwrap()
+
+    match parser.consume_if(|p| p.is_ident("struct")) {
+        Ok(s) => {
+            tokens.push(s);
+            parse_struct(parser, tokens)
+        }
+        Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
+            Ok(s) => {
+                tokens.push(s);
+                parse_enum(parser, tokens)
+            }
+
+            Err(_) => panic!("Expected a struct or enum"),
+        },
+    }
 }

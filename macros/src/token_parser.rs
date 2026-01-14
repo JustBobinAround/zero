@@ -144,6 +144,49 @@ impl TokenParser {
         self.consume_type_impl(tokens)
     }
 
+    pub fn consume_generics_impl(
+        &mut self,
+        mut tokens: Vec<TokenTree>,
+    ) -> Result<Vec<TokenTree>, ()> {
+        tokens.push(self.consume_if(|p| p.is_punct("<"))?);
+        while self.has_tokens_left() {
+            if let Ok(t) = self.consume_if(|p| p.is_punct("'")) {
+                tokens.push(t);
+                tokens.push(self.consume_if(|p| p.is_any_ident())?);
+            } else if let Ok(t) = self.consume_if(|p| p.is_any_ident()) {
+                tokens.push(t);
+                if let Ok(t) = self.consume_if(|p| p.is_punct(":")) {
+                    tokens.push(t);
+                    while self.has_tokens_left() {
+                        if let Ok(t) = self.consume_if(|p| p.is_any_ident()) {
+                            tokens.push(t);
+                            if let Ok(t) = self.consume_if(|p| p.is_punct("+")) {
+                                tokens.push(t);
+                            } else if let Ok(g) = self.consume_if(|p| p.is_any_group()) {
+                                unimplemented!("parsing of closures")
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            if !self.is_punct(",") {
+                break;
+            }
+        }
+        tokens.push(self.consume_if(|p| p.is_punct(">"))?);
+
+        Ok(tokens)
+    }
+
+    pub fn consume_generics(&mut self) -> Result<Vec<TokenTree>, ()> {
+        let tokens = Vec::new();
+        self.consume_generics_impl(tokens)
+    }
+
     pub fn to_token_stream(s: Vec<TokenTree>) -> TokenStream {
         s.into_iter().map(|tt| tt).collect()
     }
