@@ -7,6 +7,8 @@ pub mod uri;
 use crate::http::uri::RequestQuery;
 use crate::parsing::StrParser;
 use crate::parsing::prelude::*;
+use crate::serializer::DataHolder;
+use crate::serializer::Deserialize;
 use crate::stream_writer::prelude::*;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -33,7 +35,8 @@ impl ToBody for HashMap<String, String> {
     fn into_body(body: String) -> Result<Body<Self>, ()> {
         let mut parser = StrParser::from_str(body.as_str());
         let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
-        Ok(Body(query.parameters))
+        let parameters = <HashMap<String, String>>::deserialize(query.parameters)?;
+        Ok(Body(parameters))
     }
 }
 

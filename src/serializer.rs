@@ -2,10 +2,15 @@ use std::{collections::HashMap, fmt::Display, str::FromStr};
 
 use crate::parsing::Parsable;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum DataHolder {
     Primitive(String),
     Struct(HashMap<String, DataHolder>),
 }
+
+// impl DataHolder {
+//     pub fn from_map
+// }
 
 pub trait Serialize {
     fn serialize(self) -> DataHolder;
@@ -109,15 +114,5 @@ impl Deserialize for HashMap<String, String> {
                 .collect(),
             _ => Err(()),
         }
-    }
-}
-
-pub trait FromMap: Sized {
-    fn from_map(map: HashMap<String, String>) -> Result<Self, ()>;
-}
-
-impl FromMap for HashMap<String, String> {
-    fn from_map(map: HashMap<String, String>) -> Result<Self, ()> {
-        Ok(map)
     }
 }

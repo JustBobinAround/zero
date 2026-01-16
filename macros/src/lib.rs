@@ -152,83 +152,66 @@ pub fn html(item: TokenStream) -> TokenStream {
 
     s.parse().unwrap()
 }
-fn parse_enum(parser: TokenParser, tokens: Vec<TokenTree>) -> TokenStream {
-    unimplemented!("Enum serialization is not supported at this time")
-}
 
-fn parse_struct(mut parser: TokenParser, mut tokens: Vec<TokenTree>) -> TokenStream {
-    let struct_name = parser
-        .consume_if(|p| p.is_any_ident())
-        .expect("structure ident");
-    tokens.push(struct_name);
-    if parser.is_punct("<") {
-        tokens = parser
-            .consume_generics_impl(tokens)
-            .expect("Expected valid generics");
+fn parse_struct(mut parser: TokenParser, is_public: bool) -> TokenStream {
+    let data_struct = parser.consume_struct(is_public).expect("a valid struct");
+
+    let struct_name = data_struct.name();
+    let generics = data_struct.generics();
+    if generics.len() > 0 {
+        // TODO: add generic support
+        unimplemented!("deriving deserialize with generics is not currently supported");
     }
+    let fields: String = data_struct
+        .fields()
+        .iter()
+        .map(|(name, field_data)| {
+            format!(
+                "{}: match dh.remove(\"{}\") {{
+                    Some(dh) => <{}>::deserialize(dh)?,
+                    None => return Err(())
+                }},",
+                name,
+                name,
+                field_data.ty_str()
+            )
+        })
+        .collect();
 
-    let group = match parser.consume() {
-        Some(TokenTree::Group(g)) => g,
-        _ => panic!("expected inner structure"),
-    };
-
-    let mut inner_parser = TokenParser::new(group.stream());
-
-    let mut struct_map = HashMap::new();
-
-    while inner_parser.has_tokens_left() {
-        let ident = inner_parser
-            .consume_if(|p| p.is_any_ident())
-            .expect("a field name")
-            .to_string();
-
-        let (is_pub, ident) = if ident == "pub" {
-            let ident = inner_parser
-                .consume_if(|p| p.is_any_ident())
-                .expect("a field name")
-                .to_string();
-
-            (true, ident)
-        } else {
-            (false, ident)
-        };
-
-        inner_parser
-            .consume_if(|p| p.is_punct(":"))
-            .expect("a ':' after field name");
-
-        let ty = inner_parser.consume_type().expect("a field type");
-
-        struct_map.insert(ident, (is_pub, ty));
-
-        let _ = inner_parser.consume_if(|p| p.is_punct(","));
-    }
+    let output = format!(
+        r#"impl ::zero::serializer::Deserialize for {} {{
+    fn deserialize(dh: ::zero::serializer::DataHolder) -> Result<Self, ()> {{
+        match dh {{
+            ::zero::serializer::DataHolder::Struct(mut dh) => Ok(Self {{
+                {}
+            }}),
+            _ => Err(())
+        }}
+    }}
+}}"#,
+        struct_name, fields
+    );
 
     // tokens.push(group);
-    dbg!(&struct_map);
+    eprintln!("{}", &output);
 
-    "".parse().unwrap()
+    output.parse().unwrap()
 }
 
 #[proc_macro_derive(Deserialize)]
 pub fn derive_deserialize(items: TokenStream) -> TokenStream {
     let mut parser = TokenParser::new(items);
-    let mut tokens = Vec::new();
 
-    match parser.consume_if(|p| p.is_ident("pub")) {
-        Ok(t) => tokens.push(t),
-        Err(_) => {}
+    let is_pub = parser.is_ident("pub");
+    if is_pub {
+        parser.consume();
     }
 
     match parser.consume_if(|p| p.is_ident("struct")) {
-        Ok(s) => {
-            tokens.push(s);
-            parse_struct(parser, tokens)
-        }
+        Ok(s) => parse_struct(parser, is_pub),
         Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
             Ok(s) => {
-                tokens.push(s);
-                parse_enum(parser, tokens)
+                unimplemented!("Enum serialization is not supported at this time")
             }
 
             Err(_) => panic!("Expected a struct or enum"),

@@ -6,7 +6,6 @@ use zero::http::{
     routing::{Query, ResponseResult, Router},
     server::HttpServer,
 };
-use zero::serializer::FromMap;
 use zero::{Deserialize, html};
 
 // async_main!(() -> Result<(), ZeroErr> {
@@ -15,24 +14,14 @@ use zero::{Deserialize, html};
 
 //     Ok(())
 // });
+#[derive(Deserialize)]
 pub struct Usize {
     inner: usize,
+    inner2: String,
 }
 
-#[derive(Deserialize)]
-pub struct TestStruct<T> {
-    some: Vec<T>,
-}
-
-impl FromMap for Usize {
-    fn from_map(map: HashMap<String, String>) -> Result<Self, ()> {
-        eprintln!("hit inner parse");
-        let i = map.get("inner").map(|i| Ok(i)).unwrap_or(Err(()))?;
-
-        let inner = usize::from_str_radix(i, 10).map_err(|_| ())?;
-
-        Ok(Self { inner })
-    }
+pub struct TestStruct<'a, T> {
+    some: &'a Vec<T>,
 }
 
 pub async fn content(Query(i): Query<Usize>) -> ResponseResult {
@@ -41,7 +30,7 @@ pub async fn content(Query(i): Query<Usize>) -> ResponseResult {
     Ok(html! {
         BUTTON(
             id:"output",
-            fx-action:(format!("/content?inner={}",i)),
+            fx-action:(format!("/content?inner={}&inner2=3",i)),
             fx-method:"get",
             fx-trigger:"click",
             fx-target:"#output",
@@ -58,7 +47,7 @@ pub async fn index() -> ResponseResult {
     Ok(html! {
         BUTTON(
             id:"output",
-            fx-action:"/content?inner=0",
+            fx-action:"/content?inner=0&inner2=4",
             fx-method:"get",
             fx-trigger:"click",
             fx-target:"#output",

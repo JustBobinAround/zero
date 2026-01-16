@@ -1,4 +1,7 @@
-use crate::parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser};
+use crate::{
+    parsing::{Parsable, ParseErr, ParseResult, Parser, StrParser},
+    serializer::DataHolder,
+};
 use std::{cmp::Ordering, collections::HashMap, fmt::Display, io::Read};
 
 /// Based on rfc3986 Section 3.1
@@ -381,25 +384,49 @@ impl<R: Read> Parsable<R> for URIPath {
 /// This struct assumes standardization of query parameters which is technically not true.
 ///
 /// For defensive reasons, this will error if parameter is invalid, even if RFC says otherwise when accounting for more "raw" querries.
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RequestQuery {
-    pub parameters: HashMap<String, String>,
+    pub parameters: DataHolder,
+}
+
+impl Default for RequestQuery {
+    fn default() -> Self {
+        RequestQuery {
+            parameters: DataHolder::Struct(HashMap::new()),
+        }
+    }
 }
 
 impl Display for RequestQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (k, v) in self.parameters.iter() {
-            writeln!(f, "{}:{},", k, v)?;
+        match self.parameters {
+            DataHolder::Primitive(_) => {}
+            DataHolder::Struct(ref s) => {
+                for (k, v) in s.iter() {
+                    match v {
+                        DataHolder::Primitive(s) => {
+                            writeln!(f, "{}:{},", k, s)?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
+
         Ok(())
     }
 }
 
 impl RequestQuery {
     fn sorted_keys(&self) -> Vec<&String> {
-        let mut keys: Vec<&String> = self.parameters.keys().collect();
-        keys.sort();
-        keys
+        match &self.parameters {
+            DataHolder::Primitive(_) => Vec::new(),
+            DataHolder::Struct(s) => {
+                let mut keys: Vec<&String> = s.keys().collect();
+                keys.sort();
+                keys
+            }
+        }
     }
 }
 
@@ -452,7 +479,7 @@ impl<R: Read> Parsable<R> for RequestQuery {
                 }
             }
 
-            parameters.insert(key, val);
+            parameters.insert(key, DataHolder::Primitive(val));
             if parser.matches(|c| c == b'#' || c.is_ascii_whitespace()) {
                 break;
             } else {
@@ -460,7 +487,9 @@ impl<R: Read> Parsable<R> for RequestQuery {
             }
         }
 
-        Ok(RequestQuery { parameters })
+        Ok(RequestQuery {
+            parameters: DataHolder::Struct(parameters),
+        })
     }
 }
 
@@ -732,7 +761,12 @@ mod tests {
     fn test_valid_query() {
         let mut parser = StrParser::from_str("some_param=some_val  "); //needs to break on white space for http
         let mut map = HashMap::new();
-        map.insert(String::from("some_param"), String::from("some_val"));
+        map.insert(
+            String::from("some_param"),
+            DataHolder::Primitive(String::from("some_val")),
+        );
+
+        let map = DataHolder::Struct(map);
         assert_eq!(
             RequestQuery::parse(&mut parser),
             Ok(RequestQuery { parameters: map })
@@ -742,9 +776,19 @@ mod tests {
             "some_param=some_val&some_param2=some_val&some_param3=val#someflag",
         );
         let mut map = HashMap::new();
-        map.insert(String::from("some_param"), String::from("some_val"));
-        map.insert(String::from("some_param2"), String::from("some_val"));
-        map.insert(String::from("some_param3"), String::from("val"));
+        map.insert(
+            String::from("some_param"),
+            DataHolder::Primitive(String::from("some_val")),
+        );
+        map.insert(
+            String::from("some_param2"),
+            DataHolder::Primitive(String::from("some_val")),
+        );
+        map.insert(
+            String::from("some_param3"),
+            DataHolder::Primitive(String::from("val")),
+        );
+        let map = DataHolder::Struct(map);
         assert_eq!(
             RequestQuery::parse(&mut parser),
             Ok(RequestQuery { parameters: map })
@@ -754,9 +798,19 @@ mod tests {
             "some_param=some+val&some_param2=some_val&some_param3=val#someflag",
         );
         let mut map = HashMap::new();
-        map.insert(String::from("some_param"), String::from("some val"));
-        map.insert(String::from("some_param2"), String::from("some_val"));
-        map.insert(String::from("some_param3"), String::from("val"));
+        map.insert(
+            String::from("some_param"),
+            DataHolder::Primitive(String::from("some val")),
+        );
+        map.insert(
+            String::from("some_param2"),
+            DataHolder::Primitive(String::from("some_val")),
+        );
+        map.insert(
+            String::from("some_param3"),
+            DataHolder::Primitive(String::from("val")),
+        );
+        let map = DataHolder::Struct(map);
         assert_eq!(
             RequestQuery::parse(&mut parser),
             Ok(RequestQuery { parameters: map })
@@ -778,7 +832,11 @@ mod tests {
             StrParser::from_str("http://someaddress.com/apath?with=query#some_param=some_val");
 
         let mut parameters = HashMap::new();
-        parameters.insert(String::from("with"), String::from("query"));
+        parameters.insert(
+            String::from("with"),
+            DataHolder::Primitive(String::from("query")),
+        );
+        let parameters = DataHolder::Struct(parameters);
         assert_eq!(
             URI::parse(&mut parser),
             Ok(URI {

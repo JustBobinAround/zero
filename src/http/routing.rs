@@ -4,7 +4,7 @@ use super::{
     response::{Response as FullResponse, ResponseHeaderType, StatusCode},
     uri::{RequestQuery, URIPath},
 };
-use crate::{html::Markup, http::ToMessageHeader, serializer::FromMap};
+use crate::{html::Markup, http::ToMessageHeader, serializer::Deserialize};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -349,10 +349,10 @@ pub trait ToQuery: Sized {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()>;
 }
 
-impl<T: FromMap> ToQuery for T {
+impl<T: Deserialize> ToQuery for T {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()> {
         let s = query.parameters;
-        match T::from_map(s) {
+        match T::deserialize(s) {
             Ok(t) => Ok(Query(t)),
             Err(_) => Err(()),
         }
