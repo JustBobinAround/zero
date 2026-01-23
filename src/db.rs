@@ -1,10 +1,30 @@
 mod primitives;
+pub mod rand;
+pub mod uuid;
 use std::collections::BTreeMap;
+
+use crate::db::uuid::UUID;
+
+pub type PageAddress = usize;
 
 // probably going to change this to guid index
 // DB should have centeral guid index.
-pub struct Table {
-    rows: BTreeMap<usize, DatabaseBytes>,
+pub struct PageTable {
+    rows: BTreeMap<UUID, PageAddress>,
+}
+
+impl PageTable {
+    pub fn new() -> Self {
+        PageTable {
+            rows: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, db_bytes: DatabaseBytes) -> Result<(), ()> {
+        let uuid = UUID::rand_v7()?;
+        unimplemented!()
+        // self.rows.insert(uuid, db_bytes);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

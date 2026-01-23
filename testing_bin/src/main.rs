@@ -68,17 +68,16 @@ pub async fn index() -> ResponseResult {
     .into())
 }
 
-pub async fn demo(Body(s): Body<Demo>) -> ResponseResult {
-    eprintln!("{:#?}", s);
-    Ok(html! {}.into())
-}
+// pub async fn demo(Body(s): Body<Demo>) -> ResponseResult { eprintln!("{:#?}", s);
+//     Ok(html! {}.into())
+// }
 
 #[zero::main]
 async fn main() -> Result<(), i32> {
     let router = Router::new(())
         .route(Method::Get, "/", index)
         .route(Method::Get, "/content", content)
-        .route(Method::Post, "/demo", demo)
+        // .route(Method::Post, "/demo", demo)
         .include_zero_js();
 
     let mut server = HttpServer::from_router(router);

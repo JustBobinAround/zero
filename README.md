@@ -22,6 +22,7 @@ and application development. This library contains a wide variety of tools:
       - [x] URI Query Params
 - [ ] HTTPS/TLS implementation
 - [ ] Custom fork of the fixi.js implementation (created mvp)
+  - [ ] SSE support
 - [x] HTML macro with fx attributes as first-class attributes
 - [ ] Relational Database (spec still in developement)
   - [ ] Global guid search system

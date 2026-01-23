@@ -18,26 +18,26 @@ use std::io::{Read, Write};
 
 pub struct Body<T: ToBody>(pub T);
 
-impl std::fmt::Display for Body<String> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+// impl std::fmt::Display for Body<String> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.0)
+//     }
+// }
 
 pub trait ToBody: Sized {
     fn into_body(body: RequestBody) -> Result<Body<Self>, ()>;
 }
 
-impl<T: Deserialize> ToBody for T {
-    fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
-        let mut parser = StrParser::from_str(&body);
-        let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
-        match T::into_query(query) {
-            Ok(routing::Query(t)) => Ok(Body(t)),
-            _ => Err(()),
-        }
-    }
-}
+// impl<T: Deserialize> ToBody for T {
+//     fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
+//         let mut parser = StrParser::from_str(&body);
+//         let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
+//         match T::into_query(query) {
+//             Ok(routing::Query(t)) => Ok(Body(t)),
+//             _ => Err(()),
+//         }
+//     }
+// }
 
 // TODO
 // impl<T: Deserialize> ToQuery for T {
