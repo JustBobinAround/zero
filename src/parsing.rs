@@ -77,6 +77,7 @@ pub enum ParseErr {
     FailedToSeekDuringPop {
         tried_seeking_to: usize,
     },
+    ZeroLenDispositionTy,
 }
 
 /// Result type for Parsable trait

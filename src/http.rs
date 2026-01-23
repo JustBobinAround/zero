@@ -4,12 +4,15 @@ pub mod routing;
 pub mod server;
 pub mod uri;
 
+use crate::http::routing::ToQuery;
 use crate::http::uri::RequestQuery;
 use crate::parsing::StrParser;
 use crate::parsing::prelude::*;
 use crate::serializer::DataHolder;
 use crate::serializer::Deserialize;
 use crate::stream_writer::prelude::*;
+use request::RequestBody;
+pub use routing::Query;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
@@ -22,23 +25,30 @@ impl std::fmt::Display for Body<String> {
 }
 
 pub trait ToBody: Sized {
-    fn into_body(body: String) -> Result<Body<Self>, ()>;
+    fn into_body(body: RequestBody) -> Result<Body<Self>, ()>;
 }
 
-impl ToBody for String {
-    fn into_body(body: String) -> Result<Body<Self>, ()> {
-        Ok(Body(body))
-    }
-}
-
-impl ToBody for HashMap<String, String> {
-    fn into_body(body: String) -> Result<Body<Self>, ()> {
-        let mut parser = StrParser::from_str(body.as_str());
+impl<T: Deserialize> ToBody for T {
+    fn into_body(body: RequestBody) -> Result<Body<Self>, ()> {
+        let mut parser = StrParser::from_str(&body);
         let query = RequestQuery::parse(&mut parser).map_err(|_| ())?;
-        let parameters = <HashMap<String, String>>::deserialize(query.parameters)?;
-        Ok(Body(parameters))
+        match T::into_query(query) {
+            Ok(routing::Query(t)) => Ok(Body(t)),
+            _ => Err(()),
+        }
     }
 }
+
+// TODO
+// impl<T: Deserialize> ToQuery for T {
+//     fn into_query(body: String) -> Result<Query<Self>, ()> {
+//         let s = query.parameters;
+//         match T::deserialize(s) {
+//             Ok(t) => Ok(Query(t)),
+//             Err(_) => Err(()),
+//         }
+//     }
+// }
 
 /// Based on rfc2616 Section 4.2
 ///
@@ -174,18 +184,19 @@ impl<W: Write> StreamWritable<W> for HTTPVersion {
 }
 
 /// Based on rfc2616 Section 14
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum EntityHeader {
-    Allow(String),           // Section 14.7
-    ContentEncoding(String), // Section 14.11
-    ContentLanguage(String), // Section 14.12
-    ContentLength(usize),    // Section 14.13
-    ContentLocation(String), // Section 14.14
-    ContentMD5(String),      // Section 14.15
-    ContentRange(String),    // Section 14.16
-    ContentType(String),     // Section 14.17
-    Expires(String),         // Section 14.21
-    LastModified(String),    // Section 14.29
+    Allow(String),                          // Section 14.7
+    ContentEncoding(String),                // Section 14.11
+    ContentLanguage(String),                // Section 14.12
+    ContentLength(usize),                   // Section 14.13
+    ContentLocation(String),                // Section 14.14
+    ContentMD5(String),                     // Section 14.15
+    ContentRange(String),                   // Section 14.16
+    ContentType(String),                    // Section 14.17
+    Expires(String),                        // Section 14.21
+    LastModified(String),                   // Section 14.29
+    ContentDisposition(ContentDisposition), // RFC 6266
 }
 
 impl EntityHeader {
@@ -201,6 +212,7 @@ impl EntityHeader {
             EntityHeader::ContentType(_) => "content-type", // Section 14.17
             EntityHeader::Expires(_) => "expires", // Section 14.21
             EntityHeader::LastModified(_) => "last-modified", // Section 14.29
+            EntityHeader::ContentDisposition(_) => "content-disposition", // RFC 6266
         }
     }
 }
@@ -218,6 +230,7 @@ impl FromMessageHeader for EntityHeader {
             || name == "content-type"
             || name == "expires"
             || name == "last-modified"
+            || name == "content-disposition"
     }
     fn from_extension_header(eh: MessageHeader) -> ParseResult<(String, Self)> {
         let val = eh.value;
@@ -241,6 +254,10 @@ impl FromMessageHeader for EntityHeader {
             "content-type" => Self::ContentType(val),
             "expires" => Self::Expires(val),
             "last-modified" => Self::LastModified(val),
+            "content-disposition" => {
+                let mut s_parser = StrParser::from_str(&val);
+                Self::ContentDisposition(ContentDisposition::parse(&mut s_parser)?)
+            }
             _ => unreachable!(
                 "Failed to convert extension header. Perhaps can_convert was not checked"
             ),
@@ -253,16 +270,17 @@ impl FromMessageHeader for EntityHeader {
 impl ToMessageHeader for EntityHeader {
     fn consume_value_as_string(self) -> String {
         match self {
-            EntityHeader::Allow(s) => s,                     // Section 14.7
-            EntityHeader::ContentEncoding(s) => s,           // Section 14.11
-            EntityHeader::ContentLanguage(s) => s,           // Section 14.12
-            EntityHeader::ContentLength(n) => n.to_string(), // Section 14.13
-            EntityHeader::ContentLocation(s) => s,           // Section 14.14
-            EntityHeader::ContentMD5(s) => s,                // Section 14.15
-            EntityHeader::ContentRange(s) => s,              // Section 14.16
-            EntityHeader::ContentType(s) => s,               // Section 14.17
-            EntityHeader::Expires(s) => s,                   // Section 14.21
-            EntityHeader::LastModified(s) => s,              // Section 14.29
+            EntityHeader::Allow(s) => s,                          // Section 14.7
+            EntityHeader::ContentEncoding(s) => s,                // Section 14.11
+            EntityHeader::ContentLanguage(s) => s,                // Section 14.12
+            EntityHeader::ContentLength(n) => n.to_string(),      // Section 14.13
+            EntityHeader::ContentLocation(s) => s,                // Section 14.14
+            EntityHeader::ContentMD5(s) => s,                     // Section 14.15
+            EntityHeader::ContentRange(s) => s,                   // Section 14.16
+            EntityHeader::ContentType(s) => s,                    // Section 14.17
+            EntityHeader::Expires(s) => s,                        // Section 14.21
+            EntityHeader::LastModified(s) => s,                   // Section 14.29
+            EntityHeader::ContentDisposition(s) => s.to_string(), // RFC 6266
         }
     }
     fn to_msg_header(self) -> MessageHeader {
@@ -366,5 +384,77 @@ impl ToMessageHeader for GeneralHeader {
         let value = self.consume_value_as_string();
 
         MessageHeader { name, value }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DispositionType {
+    Inline,
+    Attachment,
+    DispExtType(String),
+}
+impl std::fmt::Display for DispositionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline => write!(f, "inline"),
+            Self::Attachment => write!(f, "attachment"),
+            Self::DispExtType(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl<R: Read> Parsable<R> for DispositionType {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let s = parser.consume_while_lower(|p| p.is_token_char());
+        if s.len() == 0 {
+            return Err(ParseErr::ZeroLenDispositionTy);
+        }
+
+        Ok(if s == "inline" {
+            Self::Inline
+        } else if s == "attachment" {
+            Self::Attachment
+        } else {
+            Self::DispExtType(s)
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ContentDisposition {
+    ty: DispositionType,
+    params: HashMap<String, String>,
+}
+
+impl std::fmt::Display for ContentDisposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.ty.to_string())?;
+        for (k, v) in self.params.iter() {
+            v.escape_default().to_string(); // TODO: verify if OOB escapes are fully http compliant
+            write!(f, ";{}=\"{}\"", k, v)?;
+        }
+        Ok(())
+    }
+}
+
+impl<R: Read> Parsable<R> for ContentDisposition {
+    fn parse(parser: &mut Parser<R>) -> ParseResult<Self> {
+        let ty = DispositionType::parse(parser)?;
+        let mut params = HashMap::new();
+
+        while parser.matches(|b| b == b';') {
+            parser.consume();
+            let key = parser.consume_while(|p| p.is_token_char());
+            parser.expect_str("=");
+            let val = if parser.matches(|b| b == b'"') {
+                parser.consume_str_lit()
+            } else {
+                parser.consume_while(|p| p.is_token_char())
+            };
+
+            params.insert(key, val);
+        }
+
+        Ok(Self { ty, params })
     }
 }

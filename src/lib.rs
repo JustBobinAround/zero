@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 extern crate self as zero;
 pub mod async_runtime;
+pub mod db;
 pub mod errors;
 pub mod html;
 pub mod http;

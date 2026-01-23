@@ -1,4 +1,3 @@
-use macros::html;
 use std::collections::HashMap;
 
 pub type HTML<'a> = Vec<Tag<'a>>;

@@ -480,7 +480,7 @@ impl<W: std::io::Write> StreamWritable<W> for StatusLine {
 ///                       CRLF
 ///                       [ message-body ]          ; Section 7.2
 /// ```
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ResponseHeaderType {
     GeneralHeader(GeneralHeader),
     ResponseHeader(ResponseHeader),
@@ -507,7 +507,7 @@ impl ToMessageHeader for ResponseHeaderType {
 }
 
 /// Abstraction used to take ownership of name to be held in header hashmap
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ResponseHeaderMap {
     name: String,
     ty: ResponseHeaderType,

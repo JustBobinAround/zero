@@ -173,7 +173,7 @@ impl FromMessageHeader for RequestHeader {
 ///                        CRLF
 ///                        [ message-body ]          ; Section 4.3
 /// ```
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RequestHeaderType {
     EntityHeader(EntityHeader),
     ExtensionHeader(String),
@@ -182,7 +182,7 @@ pub enum RequestHeaderType {
 }
 
 /// Abstraction used to take ownership of name to be held in header hashmap
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RequestHeaderMap {
     name: String,
     ty: RequestHeaderType,
@@ -227,7 +227,12 @@ impl<R: Read> Parsable<R> for RequestHeaderMap {
 }
 
 pub type RequestHeaders = HashMap<String, RequestHeaderType>;
-pub type RequestBody = String;
+#[derive(Debug, PartialEq, Eq)]
+pub enum RequestBody {
+    FormData(HashMap<String, String>),
+    Plain(String),
+    Empty,
+}
 
 /// Based on RFC 2616 section 5
 ///
@@ -256,7 +261,7 @@ pub type RequestTuple = (
     RequestQuery,
     HTTPVersion,
     HashMap<String, RequestHeaderType>,
-    String,
+    RequestBody,
 );
 
 impl Request {
@@ -328,9 +333,9 @@ impl<R: Read> Parsable<R> for Request {
                 // eprintln!("{}", parser.peek().unwrap() as char);
                 // parser.consume_or_err(|c| c == b'\n')?;
                 // eprintln!("hit");
-                parser.consume_n(body_len)
+                RequestBody::Plain(parser.consume_n(body_len))
             }
-            None => String::new(),
+            None => RequestBody::Empty,
         };
 
         Ok(Request {
@@ -398,7 +403,7 @@ mod tests {
                 query: query,
                 http_version: HTTPVersion { major: 1, minor: 1 },
                 headers,
-                body: String::new()
+                body: RequestBody::Empty
             })
         );
     }
@@ -437,7 +442,7 @@ mod tests {
                 query: query,
                 http_version: HTTPVersion { major: 1, minor: 1 },
                 headers,
-                body: String::from("this is a test")
+                body: RequestBody::Plain(String::from("this is a test"))
             })
         );
     }

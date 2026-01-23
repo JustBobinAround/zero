@@ -345,7 +345,7 @@ impl ToPath for HashSet<String> {
 
 pub struct Query<T: ToQuery>(pub T);
 
-pub trait ToQuery: Sized {
+pub trait ToQuery: Sized + Deserialize {
     fn into_query(query: RequestQuery) -> Result<Query<Self>, ()>;
 }
 

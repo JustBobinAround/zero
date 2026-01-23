@@ -107,45 +107,52 @@ pub fn html(item: TokenStream) -> TokenStream {
                     .unwrap();
             }
             Some(TokenTree::Group(g)) => {
-                return g.stream();
+                return format!("({}).into()", g.stream())
+                    .parse()
+                    .expect("Failed to parse inner HTML");
             }
             Some(t) => panic!("Expected TagType, found {:#?}", t),
             None => return "()".parse().unwrap(),
         };
 
-        if parser.is_punct(";") {
+        if parser.is_any_ident() {
             tokens.push_str(&format!(
                 "{{::zero::html::Tag::new(::zero::html::TagType::{})}},\n",
                 tag_name
             ));
-            parser.consume();
-            continue;
+            // parser.consume();
+            // continue;
+        } else {
+            let tt = parser.consume();
+
+            let attrs = if let Some(TokenTree::Group(g)) = tt {
+                parse_attrs(g.stream()).expect("expected valid attribute")
+            } else if tt.is_some() {
+                panic!("Expected Grouping for Attributes")
+            } else {
+                String::new()
+            };
+
+            if parser.is_any_group() {
+                let inner = match parser.consume() {
+                    Some(TokenTree::Group(g)) => html(g.stream()),
+                    None => "".parse().unwrap(),
+                    _ => {
+                        panic!("Expected Grouping for inner markup")
+                    }
+                };
+
+                tokens.push_str(&format!(
+                    "{{::zero::html::Tag::new(::zero::html::TagType::{}){}.set_content({}) }},\n",
+                    tag_name, attrs, inner
+                ));
+            } else {
+                tokens.push_str(&format!(
+                    "{{::zero::html::Tag::new(::zero::html::TagType::{}){} }},\n",
+                    tag_name, attrs
+                ));
+            }
         }
-
-        let tt = parser.consume();
-
-        let attrs = if let Some(TokenTree::Group(g)) = tt {
-            parse_attrs(g.stream()).expect("expected valid attribute")
-        } else if tt.is_some() {
-            panic!("Expected Grouping for Attributes")
-        } else {
-            String::new()
-        };
-
-        let tt = parser.consume();
-
-        let inner = if let Some(TokenTree::Group(g)) = tt {
-            html(g.stream())
-        } else if tt.is_some() {
-            panic!("Expected Grouping for inner markup")
-        } else {
-            "".parse().unwrap()
-        };
-
-        tokens.push_str(&format!(
-            "{{::zero::html::Tag::new(::zero::html::TagType::{}){}.set_content({}) }},\n",
-            tag_name, attrs, inner
-        ));
     }
 
     let s = format!("Into::<::zero::html::Markup>::into(vec![{}])", tokens);
