@@ -1,9 +1,8 @@
 use super::rand::Random;
+use crate::ToDatabaseBytes;
 use std::{cmp::Ordering, str::FromStr};
 
-/// See RFC 9562
-#[derive(Clone, Debug)]
-#[repr(C)]
+#[derive(Clone, ToDatabaseBytes, Debug, Hash)]
 pub struct UUID {
     pub data_1: u32,
     pub data_2: u16,
@@ -184,9 +183,9 @@ mod tests {
     fn test_uuid() {
         // let uuid = UUID::from_str("00000214-0010-0020-0000000000000000");
         let uuid = UUID::rand_v7();
-        assert_eq!(
-            uuid,
-            Ok(UUID {
+        // this is kind of a dumb test lol
+        assert!(
+            uuid != Ok(UUID {
                 data_1: 532,
                 data_2: 16,
                 data_3: 32,

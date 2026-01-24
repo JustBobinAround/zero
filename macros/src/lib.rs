@@ -1,10 +1,8 @@
 mod extract_macro;
 mod token_parser;
 
-use std::{collections::HashMap, iter::Peekable};
-
 use crate::{extract_macro::ExtractType, token_parser::TokenParser};
-use proc_macro::{TokenStream, TokenTree, token_stream::IntoIter};
+use proc_macro::{TokenStream, TokenTree};
 
 #[proc_macro]
 pub fn impl_extract_permutations(_item: TokenStream) -> TokenStream {
@@ -160,15 +158,16 @@ pub fn html(item: TokenStream) -> TokenStream {
     s.parse().unwrap()
 }
 
-fn parse_struct(mut parser: TokenParser, is_public: bool) -> TokenStream {
+fn parse_deserialize_struct(mut parser: TokenParser, is_public: bool) -> TokenStream {
     let data_struct = parser.consume_struct(is_public).expect("a valid struct");
 
     let struct_name = data_struct.name();
-    let generics = data_struct.generics();
-    if generics.len() > 0 {
-        // TODO: add generic support
-        unimplemented!("deriving deserialize with generics is not currently supported");
-    }
+    let generic_idents = data_struct.generic_idents();
+    let generic_traits = data_struct.generic_traits();
+    // if generics.len() > 0 {
+    //     // TODO: add generic support
+    //     unimplemented!("deriving deserialize with generics is not currently supported");
+    // }
     let fields: String = data_struct
         .fields()
         .iter()
@@ -215,9 +214,85 @@ pub fn derive_deserialize(items: TokenStream) -> TokenStream {
     }
 
     match parser.consume_if(|p| p.is_ident("struct")) {
-        Ok(s) => parse_struct(parser, is_pub),
+        Ok(_) => parse_deserialize_struct(parser, is_pub),
         Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
-            Ok(s) => {
+            Ok(_) => {
+                unimplemented!("Enum serialization is not supported at this time")
+            }
+
+            Err(_) => panic!("Expected a struct or enum"),
+        },
+    }
+}
+
+fn parse_db_bytes_struct(mut parser: TokenParser, is_public: bool) -> TokenStream {
+    let data_struct = parser.consume_struct(is_public).expect("a valid struct");
+
+    let struct_name = data_struct.name();
+    let generic_idents: String = data_struct
+        .generic_idents()
+        .iter()
+        .map(|i| i.to_string())
+        .collect();
+    let generic_traits: String = data_struct
+        .generic_traits()
+        .iter()
+        .map(|i| i.to_string())
+        .collect();
+    // if generics.len() > 0 {
+    //     // TODO: add generic support
+    //     unimplemented!("deriving ToDatabaseBytes with generics is not currently supported");
+    // }
+    let (fields, to_reverse): (String, Vec<String>) = data_struct
+        .fields()
+        .iter()
+        .map(|(name, field_data)| {
+            (
+                format!("\n\t.push_into(self.{})", name,),
+                format!(
+                    "{}: <{}>::from_db_bytes(bytes)?,\n",
+                    name,
+                    field_data.ty_str()
+                ),
+            )
+        })
+        .collect();
+    let reversed: String = to_reverse.into_iter().rev().collect();
+
+    let output = format!(
+        r#"impl{} ::zero::db::ToDatabaseBytes for {}{} {{
+            fn to_db_bytes(self) -> ::zero::db::DatabaseBytes {{
+                ::zero::db::DatabaseBytes::default(){}
+            }}
+
+            fn from_db_bytes(bytes: &mut ::zero::db::DatabaseBytes) -> Result<Self, ()> {{
+                Ok(Self {{
+                    {}
+                }})
+            }}
+        }}"#,
+        generic_traits, struct_name, generic_idents, fields, reversed
+    );
+
+    // tokens.push(group);
+    eprintln!("{}", &output);
+
+    output.parse().unwrap()
+}
+
+#[proc_macro_derive(ToDatabaseBytes)]
+pub fn derive_to_db_bytes(items: TokenStream) -> TokenStream {
+    let mut parser = TokenParser::new(items);
+
+    let is_pub = parser.is_ident("pub");
+    if is_pub {
+        parser.consume();
+    }
+
+    match parser.consume_if(|p| p.is_ident("struct")) {
+        Ok(_) => parse_db_bytes_struct(parser, is_pub),
+        Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
+            Ok(_) => {
                 unimplemented!("Enum serialization is not supported at this time")
             }
 

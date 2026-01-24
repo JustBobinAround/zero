@@ -18,16 +18,23 @@ impl StructField {
 pub struct Struct {
     is_public: bool,
     name: String,
-    generics: Vec<TokenTree>,
+    generic_idents: Vec<TokenTree>,
+    generic_traits: Vec<TokenTree>,
     fields: HashMap<Arc<String>, StructField>,
 }
 
 impl Struct {
-    pub fn new(is_public: bool, name: String, generics: Vec<TokenTree>) -> Self {
+    pub fn new(
+        is_public: bool,
+        name: String,
+        generic_idents: Vec<TokenTree>,
+        generic_traits: Vec<TokenTree>,
+    ) -> Self {
         Struct {
             is_public,
             name,
-            generics,
+            generic_idents,
+            generic_traits,
             fields: HashMap::new(),
         }
     }
@@ -40,8 +47,11 @@ impl Struct {
         &self.name
     }
 
-    pub fn generics(&self) -> &Vec<TokenTree> {
-        &self.generics
+    pub fn generic_idents(&self) -> &Vec<TokenTree> {
+        &self.generic_idents
+    }
+    pub fn generic_traits(&self) -> &Vec<TokenTree> {
+        &self.generic_traits
     }
 
     pub fn fields(&self) -> &HashMap<Arc<String>, StructField> {
@@ -193,12 +203,24 @@ impl TokenParser {
             tokens.push(self.consume_if(|p| p.is_any_ident())?);
         }
 
-        tokens.push(self.consume_if(|p| p.is_any_ident() || p.is_void())?);
-
-        if self.is_punct("<") {
-            self.consume_sub_type(tokens)
-        } else {
+        // handling array/slice edge case
+        if self.is_any_group() {
+            match self.consume() {
+                Some(t) => {
+                    tokens.push(t);
+                }
+                _ => {
+                    unreachable!("Consumed tokentree other than group even though check said group")
+                }
+            }
             Ok(tokens)
+        } else {
+            tokens.push(self.consume_if(|p| p.is_any_ident() || p.is_void())?);
+            if self.is_punct("<") {
+                self.consume_sub_type(tokens)
+            } else {
+                Ok(tokens)
+            }
         }
     }
 
@@ -209,59 +231,66 @@ impl TokenParser {
 
     pub fn consume_generics_impl(
         &mut self,
-        mut tokens: Vec<TokenTree>,
-    ) -> Result<Vec<TokenTree>, ()> {
-        tokens.push(self.consume_if(|p| p.is_punct("<"))?);
-        while self.has_tokens_left() && !self.is_punct(">") {
+        mut idents: Vec<TokenTree>,
+        mut traits: Vec<TokenTree>,
+    ) -> Result<(Vec<TokenTree>, Vec<TokenTree>), ()> {
+        let start = self.consume_if(|p| p.is_punct("<"))?;
+        idents.push(start.clone());
+        traits.push(start);
+        while self.has_tokens_left() {
             if let Ok(t) = self.consume_if(|p| p.is_punct("'")) {
-                tokens.push(t);
-                tokens.push(self.consume_if(|p| p.is_any_ident())?);
+                idents.push(t.clone());
+                traits.push(t);
+                let ident = self.consume_if(|p| p.is_any_ident())?;
+                idents.push(ident.clone());
+                traits.push(ident);
             } else if let Ok(t) = self.consume_if(|p| p.is_any_ident()) {
-                tokens.push(t);
+                idents.push(t.clone());
+                traits.push(t);
                 if let Ok(t) = self.consume_if(|p| p.is_punct(":")) {
-                    tokens.push(t);
-                    while self.has_tokens_left() {
-                        if let Ok(t) = self.consume_if(|p| p.is_any_ident()) {
-                            tokens.push(t);
-                            if let Ok(t) = self.consume_if(|p| p.is_punct("+")) {
-                                tokens.push(t);
-                            } else if let Ok(g) = self.consume_if(|p| p.is_any_group()) {
-                                unimplemented!("parsing of closures")
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
+                    traits.push(t);
+                    while let Ok(ident) = self.consume_if(|p| p.is_any_ident()) {
+                        traits.push(ident);
+                        if let Ok(t) = self.consume_if(|p| p.is_punct("+")) {
+                            traits.push(t);
+                        } else if let Ok(g) = self.consume_if(|p| p.is_any_group()) {
+                            unimplemented!(
+                                "parsing of generic closures are not currently supported"
+                            )
                         }
                     }
                 }
             }
-            if !self.is_punct(",") {
-                break;
+            if let Ok(t) = self.consume_if(|p| p.is_punct(",")) {
+                idents.push(t.clone());
+                traits.push(t);
             } else {
-                self.consume();
+                break;
             }
         }
-        tokens.push(self.consume_if(|p| p.is_punct(">"))?);
+        let end = self.consume_if(|p| p.is_punct(">"))?;
+        idents.push(end.clone());
+        traits.push(end);
 
-        Ok(tokens)
+        Ok((idents, traits))
     }
 
-    pub fn consume_generics(&mut self) -> Result<Vec<TokenTree>, ()> {
-        let tokens = Vec::new();
-        self.consume_generics_impl(tokens)
+    pub fn consume_generics(&mut self) -> Result<(Vec<TokenTree>, Vec<TokenTree>), ()> {
+        let idents = Vec::new();
+        let traits = Vec::new();
+        self.consume_generics_impl(idents, traits)
     }
 
     pub fn consume_struct(&mut self, is_public: bool) -> Result<Struct, ()> {
         let name = self.consume_if(|p| p.is_any_ident())?.to_string();
 
-        let generics = if self.is_punct("<") {
+        let (generic_idents, generic_traits) = if self.is_punct("<") {
             self.consume_generics()?
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
-        let mut data_struct = Struct::new(is_public, name, generics);
+        let mut data_struct = Struct::new(is_public, name, generic_idents, generic_traits);
 
         let fields = match self.consume() {
             Some(TokenTree::Group(g)) => g,

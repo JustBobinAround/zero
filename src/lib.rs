@@ -35,4 +35,4 @@ pub mod variadics;
 ///
 /// Additionally, this macro expects the crate to have a name of "zero". Anything
 /// else will break the macro.
-pub use macros::{Deserialize, html, main};
+pub use macros::{Deserialize, ToDatabaseBytes, html, main};
