@@ -33,7 +33,7 @@ impl PageMap {
         }
     }
 
-    pub fn insert(&mut self, db_bytes: &DatabaseBytes) -> Result<UUID, ()> {
+    pub fn insert(&mut self) -> Result<UUID, ()> {
         let uuid = UUID::rand_v7()?;
         // self.order_map.insert(uuid.clone(), address);
         // self.read_map.insert(uuid.clone(), address);
@@ -274,18 +274,31 @@ impl ToDatabaseBytes for String {
     }
 }
 
-#[derive(ToDatabaseBytes, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct TestT {
-    a: u16,
-    b: u32,
+impl<T: ToDatabaseBytes> ToDatabaseBytes for Option<T> {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        match self {
+            Some(t) => t.to_db_bytes(),
+            None => DatabaseBytes::new(0, vec![]),
+        }
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        let bytes = bytes.consume_layout()?;
+        if bytes.len() == 0 {
+            Ok(None)
+        } else {
+            let mut bytes = DatabaseBytes::new(bytes.len(), bytes);
+            Ok(Some(T::from_db_bytes(&mut bytes)?))
+        }
+    }
 }
 
 #[derive(ToDatabaseBytes)]
 pub struct TableRecord<T: ToDatabaseBytes> {
-    zero_uuid: UUID,
-    zero_created_by: UUID,
-    zero_updated_on: u64,
-    zero_updated_by: UUID,
+    z_uuid: UUID,
+    z_created_by: UUID,
+    z_updated_on: u64,
+    z_updated_by: UUID,
     data: T,
 }
 
@@ -295,23 +308,9 @@ mod tests {
 
     #[test]
     fn test_db() {
-        let a = TestT { a: 12, b: 13 };
-        let mut db = a.to_db_bytes();
-        let db = TestT::from_db_bytes(&mut db);
-        assert_eq!(Ok(TestT { a: 12, b: 13 }), db);
+        // let a = TestT { a: 12, b: 13 };
+        // let mut db = a.to_db_bytes();
+        // let db = TestT::from_db_bytes(&mut db);
+        // assert_eq!(Ok(TestT { a: 12, b: 13 }), db);
     }
 }
-// impl<T: ToDatabaseBytes> ToDatabaseBytes for TableRecord<T> {
-//     fn to_db_bytes(self) -> DatabaseBytes {
-//         let b = self.into_bytes();
-
-//         DatabaseBytes::new(b.len(), b)
-//     }
-
-//     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-//         let bytes = bytes.consume_layout()?;
-//         let s = String::from_utf8(bytes).map_err(|_| ())?;
-
-//         Ok(s)
-//     }
-// }

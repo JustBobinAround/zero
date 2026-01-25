@@ -76,10 +76,6 @@ impl UUID {
             .map_err(|_| ())?
             .as_millis() as u64;
 
-        let t_ms_48bit = t_ms & 0x0000_FFFF_FFFF_FFFF;
-        let t_high: u32 = (t_ms_48bit >> 16) as u32;
-        let t_mid: u16 = (t_ms_48bit & 0xFFFF) as u16;
-
         let rand_a = u16::rand().map_err(|_| ())?;
         let version: u16 = 0x7 << 12;
         let data_3 = version | rand_a;
@@ -89,12 +85,30 @@ impl UUID {
         data_4[1] = 0;
 
         Ok(UUID {
-            data_1: t_high,
-            data_2: t_mid,
+            data_1: 0,
+            data_2: 0,
             data_3,
             data_4,
-        })
+        }
+        .encode_time(t_ms))
     }
+
+    pub fn encode_time(mut self, t_ms: u64) -> Self {
+        self.data_1 = (t_ms >> 16) as u32;
+        self.data_2 = t_ms as u16;
+        self
+    }
+
+    pub fn extract_timestamp(&self) -> u64 {
+        ((self.data_1 as u64) << 16) | (self.data_2 as u64)
+    }
+
+    pub const ZERO: UUID = UUID {
+        data_1: 0,
+        data_2: 0,
+        data_3: 0,
+        data_4: [0_u8; 8],
+    };
 }
 
 /// See RFC 9562, section 4
@@ -180,17 +194,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_uuid() {
-        // let uuid = UUID::from_str("00000214-0010-0020-0000000000000000");
+    fn test_uuid_rand() {
         let uuid = UUID::rand_v7();
-        // this is kind of a dumb test lol
         assert!(
             uuid != Ok(UUID {
-                data_1: 532,
-                data_2: 16,
-                data_3: 32,
+                data_1: 0,
+                data_2: 0,
+                data_3: 0,
                 data_4: [0, 0, 0, 0, 0, 0, 0, 0],
             })
         );
+    }
+
+    #[test]
+    fn test_time_encoding() {
+        let t_ms = 12093472938478;
+        let uuid = UUID::rand_v7().unwrap().encode_time(t_ms);
+        assert_eq!(t_ms, uuid.extract_timestamp());
     }
 }
