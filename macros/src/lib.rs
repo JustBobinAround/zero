@@ -1,7 +1,10 @@
 mod extract_macro;
 mod token_parser;
 
-use crate::{extract_macro::ExtractType, token_parser::TokenParser};
+use crate::{
+    extract_macro::ExtractType,
+    token_parser::{Struct, TokenParser},
+};
 use proc_macro::{TokenStream, TokenTree};
 
 #[proc_macro]
@@ -225,9 +228,12 @@ pub fn derive_deserialize(items: TokenStream) -> TokenStream {
     }
 }
 
-fn parse_db_bytes_struct(mut parser: TokenParser, is_public: bool) -> TokenStream {
-    let data_struct = parser.consume_struct(is_public).expect("a valid struct");
-
+fn parse_db_bytes_struct(
+    other_traits: String,
+    mut parser: TokenParser,
+    is_public: bool,
+    data_struct: Struct,
+) -> TokenStream {
     let struct_name = data_struct.name();
     let generic_idents: String = data_struct
         .generic_idents()
@@ -260,7 +266,7 @@ fn parse_db_bytes_struct(mut parser: TokenParser, is_public: bool) -> TokenStrea
     let reversed: String = to_reverse.into_iter().rev().collect();
 
     let output = format!(
-        r#"impl{} ::zero::db::ToDatabaseBytes for {}{} {{
+        r#"{}impl{} ::zero::db::ToDatabaseBytes for {}{} {{
             fn to_db_bytes(self) -> ::zero::db::DatabaseBytes {{
                 ::zero::db::DatabaseBytes::default(){}
             }}
@@ -271,7 +277,7 @@ fn parse_db_bytes_struct(mut parser: TokenParser, is_public: bool) -> TokenStrea
                 }})
             }}
         }}"#,
-        generic_traits, struct_name, generic_idents, fields, reversed
+        other_traits, generic_traits, struct_name, generic_idents, fields, reversed
     );
 
     // tokens.push(group);
@@ -290,7 +296,65 @@ pub fn derive_to_db_bytes(items: TokenStream) -> TokenStream {
     }
 
     match parser.consume_if(|p| p.is_ident("struct")) {
-        Ok(_) => parse_db_bytes_struct(parser, is_pub),
+        Ok(_) => {
+            let data_struct = parser.consume_struct(is_pub).expect("a valid struct");
+            parse_db_bytes_struct(String::new(), parser, is_pub, data_struct)
+        }
+        Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
+            Ok(_) => {
+                unimplemented!("Enum serialization is not supported at this time")
+            }
+
+            Err(_) => panic!("Expected a struct or enum"),
+        },
+    }
+}
+#[proc_macro_derive(ZeroTable)]
+pub fn derive_zero_table(items: TokenStream) -> TokenStream {
+    let mut parser = TokenParser::new(items);
+
+    let is_pub = parser.is_ident("pub");
+    if is_pub {
+        parser.consume();
+    }
+
+    match parser.consume_if(|p| p.is_ident("struct")) {
+        Ok(_) => {
+            let data_struct = parser.consume_struct(is_pub).expect("a valid struct");
+            let traits: String = data_struct
+                .generic_traits()
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            let idents: String = data_struct
+                .generic_idents()
+                .iter()
+                .map(|t| t.to_string())
+                .collect();
+            let zero_table_trait = format!(
+                r#"impl{} ::zero::db::ZeroTable for {}{} {{
+                    fn table_name() -> &'static str {{
+                        "{}"
+                    }}
+                    fn table_version_hash() -> u64 {{
+                        {}
+                    }}
+                }}"#,
+                traits,
+                data_struct.name(),
+                idents,
+                data_struct.name(),
+                data_struct.struct_signature(),
+            );
+
+            let name = data_struct.name().clone();
+
+            let t = parse_db_bytes_struct(zero_table_trait, parser, is_pub, data_struct);
+            if name == "UUID" {
+                eprintln!("{:#?}", t);
+            }
+            t
+        }
         Err(_) => match parser.consume_if(|p| p.is_ident("enum")) {
             Ok(_) => {
                 unimplemented!("Enum serialization is not supported at this time")

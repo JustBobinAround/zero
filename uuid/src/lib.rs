@@ -1,8 +1,7 @@
-use super::rand::Random;
-use crate::ToDatabaseBytes;
+use rand::Random;
 use std::{cmp::Ordering, str::FromStr};
 
-#[derive(Clone, ToDatabaseBytes, Debug, Hash)]
+#[derive(Clone, Debug, Hash)]
 pub struct UUID {
     pub data_1: u32,
     pub data_2: u16,
@@ -51,6 +50,8 @@ impl UUID {
             data_4,
         }
     }
+
+    pub fn from_id_part(id: u64) -> Self {}
 
     /// See RFC 9562, section 5.7
     ///

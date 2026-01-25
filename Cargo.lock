@@ -5,6 +5,13 @@ version = 4
 [[package]]
 name = "macros"
 version = "0.1.0"
+dependencies = [
+ "uuid",
+]
+
+[[package]]
+name = "rand"
+version = "0.1.0"
 
 [[package]]
 name = "testing_bin"
@@ -14,8 +21,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "uuid"
+version = "0.1.0"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "zero"
 version = "0.1.0"
 dependencies = [
  "macros",
+ "uuid",
 ]

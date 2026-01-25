@@ -1,5 +1,5 @@
 use proc_macro::{TokenStream, TokenTree, token_stream::IntoIter};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Debug)]
 pub struct StructField {
@@ -20,7 +20,7 @@ pub struct Struct {
     name: String,
     generic_idents: Vec<TokenTree>,
     generic_traits: Vec<TokenTree>,
-    fields: HashMap<Arc<String>, StructField>,
+    fields: BTreeMap<Arc<String>, StructField>,
 }
 
 impl Struct {
@@ -35,8 +35,39 @@ impl Struct {
             name,
             generic_idents,
             generic_traits,
-            fields: HashMap::new(),
+            fields: BTreeMap::new(),
         }
+    }
+
+    fn hash_str(mut start: u64, s: String) -> u64 {
+        for b in s.bytes() {
+            start = start.rotate_left(1) ^ b as u64;
+        }
+        start
+    }
+
+    pub fn struct_signature(&self) -> u64 {
+        let mut start = 0;
+        let mut generic_traits: Vec<String> = self
+            .generic_traits()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        generic_traits.sort();
+
+        for t in generic_traits {
+            start = Self::hash_str(start, t);
+        }
+
+        for (name, field) in self.fields() {
+            start = Self::hash_str(start, name.to_string());
+            for t in field.ty.iter() {
+                start = Self::hash_str(start, t.to_string());
+            }
+        }
+
+        start
     }
 
     pub fn is_public(&self) -> bool {
@@ -54,7 +85,7 @@ impl Struct {
         &self.generic_traits
     }
 
-    pub fn fields(&self) -> &HashMap<Arc<String>, StructField> {
+    pub fn fields(&self) -> &BTreeMap<Arc<String>, StructField> {
         &self.fields
     }
 

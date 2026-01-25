@@ -1,8 +1,12 @@
 mod primitives;
-pub mod rand;
-pub mod uuid;
+// pub mod rand;
+pub mod system_tables;
+// mod uuid;
+// use uuid::UUID;
+//
+use uuid::UUID;
 
-use crate::{ToDatabaseBytes, db::uuid::UUID, stream_writer::StreamWritable};
+use crate::{ToDatabaseBytes, db::system_tables::User, stream_writer::StreamWritable};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -293,13 +297,84 @@ impl<T: ToDatabaseBytes> ToDatabaseBytes for Option<T> {
     }
 }
 
+/// This is implemented manually to avoid circular dependency of trait and macro
+impl ToDatabaseBytes for UUID {
+    fn to_db_bytes(self) -> ::zero::db::DatabaseBytes {
+        DatabaseBytes::default()
+            .push_into(self.data_1)
+            .push_into(self.data_2)
+            .push_into(self.data_3)
+            .push_into(self.data_4)
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        Ok(Self {
+            data_4: <[u8; 8]>::from_db_bytes(bytes)?,
+            data_3: <u16>::from_db_bytes(bytes)?,
+            data_2: <u16>::from_db_bytes(bytes)?,
+            data_1: <u32>::from_db_bytes(bytes)?,
+        })
+    }
+}
+// impl ToDatabaseBytes for UUID {}
+
+pub struct TableReference<T: ZeroTable> {
+    z_uuid: UUID,
+    _ty: std::marker::PhantomData<T>,
+}
+
+impl<T: ZeroTable> ToDatabaseBytes for TableReference<T> {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        self.z_uuid.to_db_bytes()
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        let z_uuid = UUID::from_db_bytes(bytes)?;
+        Ok(TableReference {
+            z_uuid,
+            _ty: std::marker::PhantomData,
+        })
+    }
+}
+
+pub trait ZeroTable: ToDatabaseBytes {
+    fn table_name() -> &'static str;
+    fn table_version_hash() -> u64;
+}
+
+impl<T: ZeroTable> ZeroTable for TableReference<T> {
+    fn table_name() -> &'static str {
+        T::table_name()
+    }
+
+    fn table_version_hash() -> u64 {
+        T::table_version_hash()
+    }
+}
+
 #[derive(ToDatabaseBytes)]
 pub struct TableRecord<T: ToDatabaseBytes> {
-    z_uuid: UUID,
-    z_created_by: UUID,
+    row: T,
+    z_created_by: TableReference<User>,
+    z_mod_count: u64,
+    z_updated_by: TableReference<User>,
     z_updated_on: u64,
-    z_updated_by: UUID,
-    data: T,
+    z_uuid: UUID,
+}
+
+impl<T: ToDatabaseBytes> TableRecord<T> {
+    pub fn new_system_record(row: T) -> Result<Self, ()> {
+        let z_uuid = UUID::rand_v7()?;
+        let z_updated_on = z_uuid.extract_timestamp();
+        Ok(TableRecord {
+            row,
+            z_created_by: User::SYSTEM,
+            z_mod_count: 0,
+            z_updated_by: User::SYSTEM,
+            z_updated_on,
+            z_uuid,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -308,9 +383,7 @@ mod tests {
 
     #[test]
     fn test_db() {
-        // let a = TestT { a: 12, b: 13 };
-        // let mut db = a.to_db_bytes();
-        // let db = TestT::from_db_bytes(&mut db);
-        // assert_eq!(Ok(TestT { a: 12, b: 13 }), db);
+        eprintln!("{}", User::table_version_hash());
+        panic!()
     }
 }
