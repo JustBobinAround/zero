@@ -20,6 +20,17 @@ pub struct PageMap {
     order_map: BTreeMap<UUID, PageAddress>,
     read_map: HashMap<UUID, PageAddress>,
     open_layouts: BTreeMap<usize, PageAddress>,
+    table_version_maps: HashMap<&'static str, Vec<&'static str>>,
+}
+
+impl ToDatabaseBytes for PageMap {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        unimplemented!()
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        unimplemented!()
+    }
 }
 
 // DATA LAYOUT
@@ -34,6 +45,7 @@ impl PageMap {
             order_map: BTreeMap::new(),
             read_map: HashMap::new(),
             open_layouts: BTreeMap::new(),
+            table_version_maps: HashMap::new(),
         }
     }
 
@@ -96,6 +108,10 @@ impl DatabaseBytes {
             }
             _ => Err(()),
         }
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
@@ -160,47 +176,50 @@ macro_rules! impl_to_db_bytes {
                 Ok(out)
             }
         }
-        impl ToDatabaseBytes for Vec<$t> {
-            fn to_db_bytes(self) -> DatabaseBytes {
-                let b: Vec<u8> = self
-                    .into_iter()
-                    .map(|s| s.to_le_bytes().to_vec())
-                    .flatten()
-                    .collect();
+        // impl ToDatabaseBytes for Vec<$t> {
+        //     fn to_db_bytes(self) -> DatabaseBytes {
+        //         let b: Vec<u8> = self
+        //             .into_iter()
+        //             .map(|s| s.to_le_bytes().to_vec())
+        //             .flatten()
+        //             .collect();
 
-                DatabaseBytes::new(b.len(), b)
-            }
+        //         DatabaseBytes::new(b.len(), b)
+        //     }
 
-            fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-                let raw = bytes.consume_layout()?;
+        //     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        //         let raw = bytes.consume_layout()?;
 
-                let len = raw.len() / std::mem::size_of::<$t>();
-                let mut out = Vec::new();
+        //         let len = raw.len() / std::mem::size_of::<$t>();
+        //         let mut out = Vec::new();
 
-                for i in 0..len {
-                    let mut buf = [0_u8; $bytes];
-                    let start = i * $bytes;
-                    for j in start..start + $bytes {
-                        buf[j - start] = raw[j];
-                    }
-                    out.push(<$t>::from_le_bytes(buf));
-                }
+        //         for i in 0..len {
+        //             let mut buf = [0_u8; $bytes];
+        //             let start = i * $bytes;
+        //             for j in start..start + $bytes {
+        //                 buf[j - start] = raw[j];
+        //             }
+        //             out.push(<$t>::from_le_bytes(buf));
+        //         }
 
-                Ok(out)
-            }
-        }
+        //         Ok(out)
+        //     }
+        // }
     };
 }
 
+//TODO: u8 needs manual impl for vec
 impl_to_db_bytes!(u8, 1);
 impl_to_db_bytes!(u16, 2);
 impl_to_db_bytes!(u32, 4);
 impl_to_db_bytes!(u64, 8);
+impl_to_db_bytes!(usize, 8);
 impl_to_db_bytes!(u128, 16);
 impl_to_db_bytes!(i8, 1);
 impl_to_db_bytes!(i16, 2);
 impl_to_db_bytes!(i32, 4);
 impl_to_db_bytes!(i64, 8);
+impl_to_db_bytes!(isize, 8);
 impl_to_db_bytes!(i128, 16);
 
 impl ToDatabaseBytes for char {
@@ -245,21 +264,89 @@ impl<const N: usize> ToDatabaseBytes for [char; N] {
     }
 }
 
-impl ToDatabaseBytes for Vec<char> {
-    fn to_db_bytes(self) -> DatabaseBytes {
-        let b: Vec<u8> = self
-            .into_iter()
-            .map(|s| (s as u8).to_le_bytes().to_vec())
-            .flatten()
-            .collect();
+// impl ToDatabaseBytes for Vec<char> {
+//     fn to_db_bytes(self) -> DatabaseBytes {
+//         let b: Vec<u8> = self
+//             .into_iter()
+//             .map(|s| (s as u8).to_le_bytes().to_vec())
+//             .flatten()
+//             .collect();
 
-        DatabaseBytes::new(b.len(), b)
+//         DatabaseBytes::new(b.len(), b)
+//     }
+
+//     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+//         let raw = bytes.consume_layout()?;
+
+//         Ok(raw.into_iter().map(|i| i as char).collect())
+//     }
+// }
+
+struct DatabaseVec<T: ToDatabaseBytes> {
+    t_len: usize,
+    data: Vec<u8>,
+    _ty: std::marker::PhantomData<T>,
+}
+
+impl<T: ToDatabaseBytes> From<Vec<T>> for DatabaseVec<Vec<T>> {
+    fn from(mut value: Vec<T>) -> Self {
+        if let Some(first) = value.pop() {
+            let first = first.to_db_bytes().into_bytes();
+            let t_len = first.len();
+            let end_data: Vec<u8> = value
+                .into_iter()
+                .map(|b| b.to_db_bytes().into_bytes())
+                .flatten()
+                .collect();
+            let data = [end_data, first].concat();
+            DatabaseVec {
+                t_len,
+                data,
+                _ty: std::marker::PhantomData,
+            }
+        } else {
+            DatabaseVec {
+                t_len: 0,
+                data: Vec::new(),
+                _ty: std::marker::PhantomData,
+            }
+        }
+    }
+}
+
+impl<T: ToDatabaseBytes> ToDatabaseBytes for DatabaseVec<T> {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        DatabaseBytes::default()
+            .push_into(self.t_len)
+            .push_db_bytes(DatabaseBytes::new(self.data.len(), self.data))
     }
 
     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-        let raw = bytes.consume_layout()?;
+        let data = bytes.consume_layout()?;
+        let t_len = <usize>::from_db_bytes(bytes)?;
+        Ok(DatabaseVec {
+            t_len,
+            data,
+            _ty: std::marker::PhantomData,
+        })
+    }
+}
+impl<A: ToDatabaseBytes> ToDatabaseBytes for Vec<A> {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        let db_vec: DatabaseVec<Vec<A>> = self.into();
+        db_vec.to_db_bytes()
+    }
 
-        Ok(raw.into_iter().map(|i| i as char).collect())
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        let db_vec = DatabaseVec::<Vec<A>>::from_db_bytes(bytes)?;
+
+        let mut v = Vec::new();
+        for chunk in db_vec.data.chunks(db_vec.t_len) {
+            let mut db_bytes = DatabaseBytes::new(db_vec.t_len, chunk.to_vec());
+            v.push(A::from_db_bytes(&mut db_bytes)?);
+        }
+
+        Ok(v)
     }
 }
 
@@ -296,6 +383,14 @@ impl<T: ToDatabaseBytes> ToDatabaseBytes for Option<T> {
         }
     }
 }
+// impl<A: ToDatabaseBytes> ToDatabaseBytes for HashMap<A, B> {
+//     fn to_db_bytes(self) -> DatabaseBytes {
+
+//     }
+//     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+
+//     }
+// }
 
 /// This is implemented manually to avoid circular dependency of trait and macro
 impl ToDatabaseBytes for UUID {
@@ -339,7 +434,7 @@ impl<T: ZeroTable> ToDatabaseBytes for TableReference<T> {
 
 pub trait ZeroTable: ToDatabaseBytes {
     fn table_name() -> &'static str;
-    fn table_version_hash() -> u64;
+    fn table_version_hash() -> UUID;
 }
 
 impl<T: ZeroTable> ZeroTable for TableReference<T> {
@@ -347,7 +442,7 @@ impl<T: ZeroTable> ZeroTable for TableReference<T> {
         T::table_name()
     }
 
-    fn table_version_hash() -> u64 {
+    fn table_version_hash() -> UUID {
         T::table_version_hash()
     }
 }
@@ -362,7 +457,7 @@ pub struct TableRecord<T: ToDatabaseBytes> {
     z_uuid: UUID,
 }
 
-impl<T: ToDatabaseBytes> TableRecord<T> {
+impl<T: ZeroTable> TableRecord<T> {
     pub fn new_system_record(row: T) -> Result<Self, ()> {
         let z_uuid = UUID::rand_v7()?;
         let z_updated_on = z_uuid.extract_timestamp();
@@ -383,7 +478,12 @@ mod tests {
 
     #[test]
     fn test_db() {
-        eprintln!("{}", User::table_version_hash());
-        panic!()
+        let test_vec = vec![1, 2, 3, 4, 5];
+        let test_vec2 = test_vec.clone();
+        eprintln!("{:#?}", test_vec);
+        let mut bytes = test_vec2.to_db_bytes();
+        eprintln!("{:#?}", bytes);
+        let test_vec2 = <Vec<i32>>::from_db_bytes(&mut bytes).expect("Failed to parse db bytes");
+        assert_eq!(test_vec, test_vec2);
     }
 }

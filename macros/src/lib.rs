@@ -6,6 +6,7 @@ use crate::{
     token_parser::{Struct, TokenParser},
 };
 use proc_macro::{TokenStream, TokenTree};
+use uuid::UUID;
 
 #[proc_macro]
 pub fn impl_extract_permutations(_item: TokenStream) -> TokenStream {
@@ -336,15 +337,17 @@ pub fn derive_zero_table(items: TokenStream) -> TokenStream {
                     fn table_name() -> &'static str {{
                         "{}"
                     }}
-                    fn table_version_hash() -> u64 {{
-                        {}
+                    fn table_version_hash() -> ::zero::UUID {{
+                        ::zero::{}
                     }}
                 }}"#,
                 traits,
                 data_struct.name(),
                 idents,
                 data_struct.name(),
-                data_struct.struct_signature(),
+                UUID::from_table_hash(data_struct.struct_signature())
+                    .expect("Failed to build table uuid")
+                    .as_token_string(),
             );
 
             let name = data_struct.name().clone();

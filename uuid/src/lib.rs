@@ -51,7 +51,43 @@ impl UUID {
         }
     }
 
-    pub fn from_id_part(id: u64) -> Self {}
+    pub fn as_token_string(&self) -> String {
+        format!(
+            "UUID::new({},{},{},[{}])",
+            self.data_1,
+            self.data_2,
+            self.data_3,
+            self.data_4
+                .iter()
+                .map(|s| format!("{},", s))
+                .collect::<String>()
+        )
+    }
+
+    pub fn from_table_hash(table_hash: u64) -> Result<Self, ()> {
+        let t_ms = Self::current_time()?;
+        Ok(UUID::default().encode_time(t_ms).encode_id(table_hash))
+    }
+
+    pub fn as_table_hash(&self) -> u64 {
+        u64::from_le_bytes(self.data_4)
+    }
+
+    pub fn encode_id(mut self, id: u64) -> Self {
+        self.data_3 = 0x7 << 12;
+        self.data_4 = id.to_le_bytes();
+
+        self
+    }
+
+    fn current_time() -> Result<u64, ()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        Ok(SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ())?
+            .as_millis() as u64)
+    }
 
     /// See RFC 9562, section 5.7
     ///
@@ -70,13 +106,7 @@ impl UUID {
     /// ```
     /// See rand module to see how random nums are generated
     pub fn rand_v7() -> Result<Self, ()> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let t_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| ())?
-            .as_millis() as u64;
-
+        let t_ms = Self::current_time()?;
         let rand_a = u16::rand().map_err(|_| ())?;
         let version: u16 = 0x7 << 12;
         let data_3 = version | rand_a;
@@ -103,13 +133,17 @@ impl UUID {
     pub fn extract_timestamp(&self) -> u64 {
         ((self.data_1 as u64) << 16) | (self.data_2 as u64)
     }
+}
 
-    pub const ZERO: UUID = UUID {
-        data_1: 0,
-        data_2: 0,
-        data_3: 0,
-        data_4: [0_u8; 8],
-    };
+impl Default for UUID {
+    fn default() -> Self {
+        UUID {
+            data_1: 0,
+            data_2: 0,
+            data_3: 0,
+            data_4: [0_u8; 8],
+        }
+    }
 }
 
 /// See RFC 9562, section 4
