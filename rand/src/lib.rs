@@ -1,5 +1,6 @@
 use std::io::Read;
 
+#[derive(Debug)]
 pub enum RandErr {
     FailedToOpenURandom,
     FailedToReadURandom,

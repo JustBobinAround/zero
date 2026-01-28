@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 // use std::net::TcpListener;
 // use zero::http::response::Response;
+use rand::Random;
 use zero::http::{
     Body, Query,
     request::Method,
@@ -72,16 +75,32 @@ pub async fn index() -> ResponseResult {
 //     Ok(html! {}.into())
 // }
 
-#[zero::main]
-async fn main() -> Result<(), i32> {
-    let router = Router::new(())
-        .route(Method::Get, "/", index)
-        .route(Method::Get, "/content", content)
-        // .route(Method::Post, "/demo", demo)
-        .include_zero_js();
+// #[zero::main]
+fn main() -> Result<(), ()> {
+    // let router = Router::new(())
+    //     .route(Method::Get, "/", index)
+    //     .route(Method::Get, "/content", content)
+    //     // .route(Method::Post, "/demo", demo)
+    //     .include_zero_js();
 
-    let mut server = HttpServer::from_router(router);
+    // let mut server = HttpServer::from_router(router);
 
-    let serve = server.serve("127.0.0.1:8000").await;
-    Err(1)
+    // let serve = server.serve("127.0.0.1:8000").await;
+
+    let mut buf_rw = zero::db::BufferedRW::new("test.db")?;
+    loop {
+        let duration = Duration::from_secs(u64::rand().unwrap() % 10);
+        println!("waiting: {:#?}", duration);
+        std::thread::sleep(duration);
+        let page = buf_rw.read_page(&0)?;
+        println!("reading: {}", page[0]);
+        let duration = Duration::from_secs(u64::rand().unwrap() % 10);
+        println!("waiting: {:#?}", duration);
+        let r = <[u8; 4096]>::rand().map_err(|_| ())?;
+        println!("writing: {}", r[0]);
+        buf_rw.write_page(&0, r)?;
+        buf_rw.write_page(&4096, [42; 4096])?;
+        buf_rw.flush_wal()?;
+    }
+    Ok(())
 }

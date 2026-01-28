@@ -64,15 +64,32 @@ impl UUID {
         )
     }
 
+    /// Encodes a table hash into UUID with the current unix timestamp
+    ///
+    /// ```text
+    ///  0                   1                   2                   3
+    ///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |                           unix_ts_ms                          |
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |          unix_ts_ms           |  ver  |0 0 0 0 0 0 0 0 0 0 0 0|
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |                          table_hash                           |
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// |                          table_hash                           |
+    /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    /// ```
     pub fn from_table_hash(table_hash: u64) -> Result<Self, ()> {
         let t_ms = Self::current_time()?;
         Ok(UUID::default().encode_time(t_ms).encode_id(table_hash))
     }
 
+    /// Decodes a table hash from a UUID. Version check must be done by user.
     pub fn as_table_hash(&self) -> u64 {
         u64::from_le_bytes(self.data_4)
     }
 
+    /// Sets rand_b section of uuid, forces rand_a to b 0 and uuid version to be v7.
     pub fn encode_id(mut self, id: u64) -> Self {
         self.data_3 = 0x7 << 12;
         self.data_4 = id.to_le_bytes();

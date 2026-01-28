@@ -9,10 +9,321 @@ use uuid::UUID;
 use crate::{ToDatabaseBytes, db::system_tables::User, stream_writer::StreamWritable};
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
+    fs::{File, OpenOptions},
+    io::{BufReader, BufWriter, Read, Seek, Write},
+    os::unix::fs::FileExt,
+    path::Path,
+    sync::{Arc, RwLock, atomic::AtomicBool},
 };
 
 pub type PageAddress = usize;
+
+pub enum WalOp {
+    Write,
+    Commit,
+    Extension(usize),
+}
+
+impl WalOp {
+    pub const BIT_OFFSET: usize = 52;
+    pub const MASK: usize = 0xFFF << Self::BIT_OFFSET;
+    pub const WRITE: usize = 1 << Self::BIT_OFFSET;
+    pub const COMMIT: usize = 2 << Self::BIT_OFFSET;
+
+    pub fn as_page_number(&self, address: usize) -> WalPageNumber {
+        let op_num = match self {
+            Self::Write => Self::WRITE,
+            Self::Commit => Self::COMMIT,
+            Self::Extension(n) => n << Self::BIT_OFFSET,
+        };
+
+        WalPageNumber(op_num | (address >> 12))
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WalPageNumber(usize);
+
+impl WalPageNumber {
+    pub fn split(self) -> (WalOp, PageAddress) {
+        let op = match self.0 & WalOp::MASK {
+            WalOp::WRITE => WalOp::Write,
+            WalOp::COMMIT => WalOp::Commit,
+            n => WalOp::Extension(n),
+        };
+
+        (op, self.0 << 12)
+    }
+
+    pub fn from_raw(raw: usize) -> Self {
+        WalPageNumber(raw)
+    }
+
+    pub fn from_parts(op: WalOp, address: usize) -> Self {
+        op.as_page_number(address)
+    }
+}
+
+pub type Page = [u8; 4096];
+
+#[derive(Debug)]
+pub struct BufferedRW {
+    db_file: File,
+    wal_file: File,
+    update_ledger: HashMap<PageAddress, Arc<Page>>,
+    read_buffer: HashMap<PageAddress, Arc<Page>>,
+    ledger_version: usize,
+    commit: usize,
+}
+
+impl BufferedRW {
+    pub const MAX_BUF: usize = 1000;
+    pub fn new(path: &str) -> Result<Self, ()> {
+        let path = Path::new(path);
+        let wal_file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(path.with_extension("zero_wal"))
+            .map_err(|_| ())?;
+        wal_file.unlock().map_err(|_| ())?;
+
+        let db_file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(path)
+            .map_err(|_| ())?;
+        db_file.unlock().map_err(|_| ())?;
+
+        Ok(BufferedRW {
+            db_file,
+            wal_file,
+            update_ledger: HashMap::new(),
+            read_buffer: HashMap::new(),
+            ledger_version: 0,
+            commit: 0,
+        })
+    }
+
+    fn wal_read<T, F: Fn(&Self) -> Result<T, ()>>(&self, f: F) -> Result<T, ()> {
+        self.wal_file.lock_shared().map_err(|_| ())?;
+        let t = f(self);
+        self.wal_file.unlock().map_err(|_| ())?;
+        Ok(t?)
+    }
+    fn wal_read_mut<T, F: Fn(&mut Self) -> Result<T, ()>>(&mut self, f: F) -> Result<T, ()> {
+        self.wal_file.lock_shared().map_err(|_| ())?;
+        let t = f(self);
+        self.wal_file.unlock().map_err(|_| ())?;
+        Ok(t?)
+    }
+    fn wal_write_mut<T, F: Fn(&mut Self) -> Result<T, ()>>(&mut self, f: F) -> Result<T, ()> {
+        self.wal_file.lock().map_err(|_| ())?;
+        let t = f(self);
+        self.wal_file.unlock().map_err(|_| ())?;
+        Ok(t?)
+    }
+
+    fn db_read_mut<T, F: Fn(&mut Self) -> Result<T, ()>>(&mut self, f: F) -> Result<T, ()> {
+        self.wal_file.lock_shared().map_err(|_| ())?;
+        let t = f(self);
+        self.wal_file.unlock().map_err(|_| ())?;
+        Ok(t?)
+    }
+    fn db_write_mut<T, F: Fn(&mut Self) -> Result<T, ()>>(&mut self, f: F) -> Result<T, ()> {
+        self.wal_file.lock().map_err(|_| ())?;
+        let t = f(self);
+        self.wal_file.unlock().map_err(|_| ())?;
+        Ok(t?)
+    }
+
+    fn fetch_file_version(&self) -> Result<(usize, usize), ()> {
+        self.wal_read(|s| {
+            let mut buf = [0_8; 8];
+            let len_read = s.wal_file.read_at(&mut buf, 0).map_err(|_| ())?;
+            if len_read != 8 {
+                return Err(());
+            }
+            let commit = usize::from_le_bytes(buf);
+            let len_read = s.wal_file.read_at(&mut buf, 1).map_err(|_| ())?;
+            if len_read != 8 {
+                return Err(());
+            }
+            let ledger_version = usize::from_le_bytes(buf);
+            Ok((commit, ledger_version))
+        })
+    }
+
+    fn sync_wal(&mut self) -> Result<(), ()> {
+        self.wal_read_mut(|s| {
+            let mut commit = [0_u8; 8];
+            let bytes_read = s.wal_file.read_at(&mut commit, 0).map_err(|e| ())?;
+            if bytes_read != 8 {
+                return Err(());
+            }
+
+            let mut ledger_version = [0_u8; 8];
+            let bytes_read = s.wal_file.read_at(&mut ledger_version, 8).map_err(|_| ())?;
+            if bytes_read != 8 {
+                return Err(());
+            }
+
+            let commit = usize::from_le_bytes(commit);
+            let ledger_version = usize::from_le_bytes(ledger_version);
+
+            if commit > s.commit {
+                s.update_ledger.clear();
+                s.read_buffer.clear();
+                s.ledger_version = 0;
+                s.wal_file
+                    .seek(std::io::SeekFrom::Start(16))
+                    .map_err(|_| ())?;
+                while s.ledger_version < ledger_version {
+                    let mut page_address = [0_u8; 8];
+                    let bytes_read = s.wal_file.read(&mut page_address).map_err(|_| ())?;
+                    if bytes_read != 8 {
+                        return Err(());
+                    }
+
+                    let mut page = [0_u8; 4096];
+                    let bytes_read = s.wal_file.read(&mut page).map_err(|_| ())?;
+                    if bytes_read != 4096 {
+                        return Err(());
+                    }
+
+                    let page_address = usize::from_le_bytes(page_address);
+                    let page = Arc::new(page);
+
+                    s.update_ledger.insert(page_address, page.clone());
+                    s.read_buffer.insert(page_address, page);
+
+                    s.ledger_version += 1;
+                }
+            } else if s.ledger_version < ledger_version {
+                while s.ledger_version < ledger_version {
+                    let mut page_address = [0_u8; 8];
+                    let bytes_read = s.wal_file.read(&mut page_address).map_err(|_| ())?;
+                    if bytes_read != 8 {
+                        return Err(());
+                    }
+
+                    let mut page = [0_u8; 4096];
+                    let bytes_read = s.wal_file.read(&mut page).map_err(|_| ())?;
+                    if bytes_read != 4096 {
+                        return Err(());
+                    }
+
+                    let page_address = usize::from_le_bytes(page_address);
+                    let page = Arc::new(page);
+
+                    s.update_ledger.insert(page_address, page.clone());
+                    s.read_buffer.insert(page_address, page);
+
+                    s.ledger_version += 1;
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    fn update_read_buf(&mut self, page_address: PageAddress, page: Arc<Page>) {
+        match self.read_buffer.get_mut(&page_address) {
+            Some(found_page) => {
+                *found_page = page;
+            }
+
+            None => {
+                if self.read_buffer.len() >= Self::MAX_BUF && self.read_buffer.len() > 0 {
+                    let rand_key = *self
+                        .read_buffer
+                        .keys()
+                        .next()
+                        .expect("read buffer found none, this should be impossible");
+
+                    self.read_buffer.remove(&rand_key);
+                }
+
+                self.read_buffer.insert(page_address, page);
+            }
+        };
+    }
+
+    pub fn read_page(&mut self, page_address: &PageAddress) -> Result<Arc<Page>, ()> {
+        let page_address = (page_address >> 12) << 12;
+        self.sync_wal()?;
+        match self.read_buffer.get(&page_address) {
+            Some(wal_page) => Ok(wal_page.clone()),
+            None => self.db_read_mut(|s| {
+                let mut page = [0_u8; 4096];
+                match s.db_file.read_at(&mut page, page_address as u64) {
+                    Ok(_) => {
+                        let page = Arc::new(page);
+                        s.update_read_buf(page_address, page.clone());
+                        Ok(page)
+                    }
+                    Err(_) => Err(()),
+                }
+            }),
+        }
+    }
+
+    pub fn write_page(&mut self, page_address: &PageAddress, page: Page) -> Result<(), ()> {
+        let page_address = (page_address >> 12) << 12;
+        self.wal_write_mut(|s| {
+            let page = Arc::new(page);
+            s.update_read_buf(page_address, page.clone());
+            s.wal_file
+                .write(&page_address.to_le_bytes())
+                .map_err(|_| ())?;
+            s.wal_file.write(&*page).map_err(|_| ())?;
+            s.ledger_version += 1;
+            let ledger_version = s.ledger_version.to_le_bytes();
+            s.update_ledger.insert(page_address, page);
+            if s.update_ledger.len() > Self::MAX_BUF {
+                s.read_buffer.clear();
+                s.ledger_version = 0;
+                s.commit = 0;
+                s.wal_file.set_len(16).map_err(|_| ())?;
+                s.wal_file
+                    .seek(std::io::SeekFrom::Start(0))
+                    .map_err(|_| ())?;
+                let commit = s.commit.to_le_bytes();
+                let ledger_version = s.ledger_version.to_le_bytes();
+                s.wal_file.write(&commit).map_err(|_| ())?;
+                s.wal_file.write(&ledger_version).map_err(|_| ())?;
+
+                s.flush_wal()?;
+            } else {
+                s.wal_file.write_at(&ledger_version, 8).map_err(|_| ())?;
+            }
+
+            Ok(())
+        })
+    }
+
+    pub fn flush_wal(&mut self) -> Result<(), ()> {
+        self.db_write_mut(|s| {
+            let mut map = HashMap::new();
+            std::mem::swap(&mut s.update_ledger, &mut map);
+            for (address, page) in map {
+                s.db_file.write_at(&*page, address as u64).map_err(|_| ())?;
+            }
+
+            Ok(())
+        })
+    }
+}
+
+// impl<F: Read + Write> BufferedRW<F> {
+//     pub fn new(file: F) -> Self {
+//         let reader = VecDeque::new();
+//         let writer =
+//     }
+// }
 
 // probably going to change this to guid index
 // DB should have centeral guid index.
@@ -23,13 +334,63 @@ pub struct PageMap {
     table_version_maps: HashMap<&'static str, Vec<&'static str>>,
 }
 
-impl ToDatabaseBytes for PageMap {
+impl ToDatabaseBytes for (UUID, PageAddress) {
     fn to_db_bytes(self) -> DatabaseBytes {
-        unimplemented!()
+        DatabaseBytes::default().push_into(self.0).push_into(self.1)
     }
 
     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-        unimplemented!()
+        let page_address = <PageAddress>::from_db_bytes(bytes)?;
+        let uuid = <UUID>::from_db_bytes(bytes)?;
+
+        Ok((uuid, page_address))
+    }
+}
+
+impl ToDatabaseBytes for (usize, PageAddress) {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        DatabaseBytes::default().push_into(self.0).push_into(self.1)
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        let page_address = <PageAddress>::from_db_bytes(bytes)?;
+        let layout = <usize>::from_db_bytes(bytes)?;
+
+        Ok((layout, page_address))
+    }
+}
+
+impl ToDatabaseBytes for PageMap {
+    fn to_db_bytes(self) -> DatabaseBytes {
+        let key_vals: Vec<(UUID, PageAddress)> = self.order_map.into_iter().map(|i| i).collect();
+
+        let open_layouts: Vec<(usize, PageAddress)> =
+            self.open_layouts.into_iter().map(|i| i).collect();
+
+        DatabaseBytes::default()
+            .push_into(key_vals)
+            .push_into(open_layouts)
+    }
+
+    fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
+        let open_layouts: BTreeMap<usize, PageAddress> =
+            <Vec<(usize, PageAddress)>>::from_db_bytes(bytes)?
+                .into_iter()
+                .map(|(k, v)| (k, v))
+                .collect();
+        let key_vals = <Vec<(UUID, PageAddress)>>::from_db_bytes(bytes)?;
+        let (order_map, read_map): (BTreeMap<UUID, PageAddress>, HashMap<UUID, PageAddress>) =
+            key_vals
+                .into_iter()
+                .map(|(k, v)| ((k.clone(), v.clone()), (k.clone(), v.clone())))
+                .collect();
+
+        Ok(PageMap {
+            order_map,
+            read_map,
+            open_layouts,
+            table_version_maps: HashMap::new(),
+        })
     }
 }
 
@@ -176,35 +537,6 @@ macro_rules! impl_to_db_bytes {
                 Ok(out)
             }
         }
-        // impl ToDatabaseBytes for Vec<$t> {
-        //     fn to_db_bytes(self) -> DatabaseBytes {
-        //         let b: Vec<u8> = self
-        //             .into_iter()
-        //             .map(|s| s.to_le_bytes().to_vec())
-        //             .flatten()
-        //             .collect();
-
-        //         DatabaseBytes::new(b.len(), b)
-        //     }
-
-        //     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-        //         let raw = bytes.consume_layout()?;
-
-        //         let len = raw.len() / std::mem::size_of::<$t>();
-        //         let mut out = Vec::new();
-
-        //         for i in 0..len {
-        //             let mut buf = [0_u8; $bytes];
-        //             let start = i * $bytes;
-        //             for j in start..start + $bytes {
-        //                 buf[j - start] = raw[j];
-        //             }
-        //             out.push(<$t>::from_le_bytes(buf));
-        //         }
-
-        //         Ok(out)
-        //     }
-        // }
     };
 }
 
@@ -263,24 +595,6 @@ impl<const N: usize> ToDatabaseBytes for [char; N] {
         Ok(out)
     }
 }
-
-// impl ToDatabaseBytes for Vec<char> {
-//     fn to_db_bytes(self) -> DatabaseBytes {
-//         let b: Vec<u8> = self
-//             .into_iter()
-//             .map(|s| (s as u8).to_le_bytes().to_vec())
-//             .flatten()
-//             .collect();
-
-//         DatabaseBytes::new(b.len(), b)
-//     }
-
-//     fn from_db_bytes(bytes: &mut DatabaseBytes) -> Result<Self, ()> {
-//         let raw = bytes.consume_layout()?;
-
-//         Ok(raw.into_iter().map(|i| i as char).collect())
-//     }
-// }
 
 struct DatabaseVec<T: ToDatabaseBytes> {
     t_len: usize,
